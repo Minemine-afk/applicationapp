@@ -273,10 +273,12 @@ def questions_cmd(config: ConfigOpt = None) -> None:
         console.print("No unanswered questions.")
     for i, (question, jobs) in enumerate(waiting.items(), 1):
         console.print(f"[bold]{i}.[/bold] {question}")
+        if options := Q.question_options(db, question):
+            console.print(f"   options: {' | '.join(options)}")
         console.print(f"   [dim]waiting: {'; '.join(jobs[:3])}"
                       f"{f' +{len(jobs) - 3} more' if len(jobs) > 3 else ''}[/dim]")
     if waiting:
-        console.print("\nAnswer with [cyan]mcf-apply answer <number> yes|no[/cyan]. "
+        console.print("\nAnswer with [cyan]mcf-apply answer <number> <answer>[/cyan]. "
                       "These go to employers as your answers, so answer truthfully.")
     db.close()
 
@@ -284,7 +286,7 @@ def questions_cmd(config: ConfigOpt = None) -> None:
 @app.command("answer")
 def answer_cmd(
     question: Annotated[str, typer.Argument(help="Number from `mcf-apply questions`, or the text")],
-    answer: Annotated[str, typer.Argument(help="yes or no")],
+    answer: Annotated[list[str], typer.Argument(help="yes, no, an option's wording, or text")],
     config: ConfigOpt = None,
 ) -> None:
     """Save your answer to a screening question and release jobs waiting on it."""
@@ -295,12 +297,14 @@ def answer_cmd(
             console.print(f"[red]No question {question}. See `mcf-apply questions`.[/red]")
             raise typer.Exit(1)
         question = waiting[int(question) - 1]
-    if answer.lower() not in ("yes", "no"):
-        console.print("[red]Answer must be yes or no.[/red]")
+    text = " ".join(answer).strip()
+    options = Q.question_options(db, question)
+    if options and not any(text.lower() == o.lower() for o in options):
+        console.print(f"[red]Pick one of the employer's options: {' | '.join(options)}[/red]")
         raise typer.Exit(1)
     bank = AnswerBank(cfg.apply.answers_path)
-    bank.add(question, answer)
-    console.print(f"Saved: {question} → [bold]{answer.lower()}[/bold]")
+    bank.add(question, text)
+    console.print(f"Saved: {question} → [bold]{text}[/bold]")
     _print_decisions(Q.refresh_answers(db, bank))
     db.close()
 

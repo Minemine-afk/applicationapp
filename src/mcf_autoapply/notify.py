@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable
@@ -13,10 +12,11 @@ from zoneinfo import ZoneInfo
 
 from mcf_autoapply.config import Config, get_env
 from mcf_autoapply.db import STATUS_NEW, Database, applied_key
-from mcf_autoapply.overrides import MAX_DAILY, MAX_HOURLY, MODES, set_limits, set_mode
+from mcf_autoapply.overrides import (MAX_DAILY, MAX_HOURLY, MAX_JS_DAILY, MAX_JS_HOURLY, MODES,
+                                     set_limits, set_mode, set_site_limits)
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
-from mcf_autoapply.pipeline.answers import AnswerBank
+from mcf_autoapply.pipeline.answers import AnswerBank, question_key
 from mcf_autoapply.pipeline.pacer import Pacer
 from mcf_autoapply.sources import LABELS, SITE_NAMES
 from mcf_autoapply.telegram import TelegramAPI, TelegramError
@@ -47,8 +47,6 @@ MODE_HELP = {
 }
 
 
-def question_key(question: str) -> str:
-    return hashlib.sha1(question.encode()).hexdigest()[:12]
 
 
 class Notifier:
@@ -154,14 +152,23 @@ class Notifier:
                 continue
             waiting = "; ".join(escape(j) for j in jobs[:3]) + (
                 f" +{len(jobs) - 3} more" if len(jobs) > 3 else "")
+            options = Q.question_options(self.db, question)
             text = (f"❓ <b>Screening question</b>\n{escape(question)}\n\n"
                     f"<i>Waiting: {waiting}</i>\n"
                     "Your answer is sent to employers and reused for every job that asks it.")
-            msg = self._send(text, [[("Yes", f"q:{key}:yes"), ("No", f"q:{key}:no")]])
+            if options:
+                # One button per option, two per row; the index travels in the callback.
+                buttons = [[(opt[:40], f"q:{key}:{i}") for i, opt in row]
+                           for row in _rows(list(enumerate(options)), 2)]
+            else:
+                buttons = [[("Yes", f"q:{key}:yes"), ("No", f"q:{key}:no")]]
+                text += "\nIf it needs words or a number instead, <b>reply to this message</b> with your answer."
+            msg = self._send(text, buttons)
             if msg is None:
                 break
             self.db.set_state(f"tg:q:{key}", json.dumps({"question": question,
                                                          "message_id": msg["message_id"]}))
+            self.db.set_state(f"tg:qmsg:{msg['message_id']}", key)
             sent += 1
         self.db.commit()
         return sent
@@ -318,6 +325,8 @@ class Notifier:
             return f"linked chat {chat}"
         if chat != self.chat_id:
             return None
+        if msg.get("reply_to_message") and not command.startswith("/"):
+            return self._on_reply(msg)
         if command in handlers:
             # Save the offset first: a long command (/login) must not run twice.
             self.db.commit()
@@ -328,6 +337,40 @@ class Notifier:
         if text:
             self._send(self.help_text(handlers))
         return None
+
+    def _save_answer(self, question: str, answer: str, message_id: int, original: str,
+                     ack: Callable[[str], None] | None = None) -> str:
+        bank = AnswerBank(self.cfg.apply.answers_path)
+        bank.add(question, answer)
+        released = Q.refresh_answers(self.db, bank)
+        note = f" · {len(released)} job(s) queued" if released else ""
+        try:
+            self.api.edit(self.chat_id, message_id,
+                          f"{original}\n\n<b>→ answered {escape(answer)}{note}</b>")
+        except TelegramError:
+            pass
+        if ack:
+            ack(f"Saved: {answer}")
+        return f"answered {answer}: {question}"
+
+    def _on_reply(self, msg: dict) -> str | None:
+        """A reply to a question card = a typed answer (free-text questions)."""
+        parent = msg.get("reply_to_message") or {}
+        key = self.db.get_state(f"tg:qmsg:{parent.get('message_id')}") if parent else None
+        text = (msg.get("text") or "").strip()
+        if not key or not text:
+            return None
+        stored = json.loads(self.db.get_state(f"tg:q:{key}") or "{}")
+        question = stored.get("question")
+        if not question:
+            return None
+        options = Q.question_options(self.db, question)
+        if options and not any(text.lower() == o.lower() for o in options):
+            self._send("That question has fixed options; tap one of the buttons on the card.")
+            return "rejected a typed answer to a choice question"
+        self._save_answer(question, text, parent["message_id"], escape(parent.get("text") or ""))
+        self._send(f"Saved your answer: <b>{escape(text)}</b>")
+        return f"answered {text}: {question}"
 
     def builtin_commands(self) -> dict[str, Handler]:
         return {
@@ -393,6 +436,13 @@ class Notifier:
     def _cmd_limits(self, args: str) -> str:
         a = self.cfg.apply
         parts = args.split()
+        if len(parts) == 3 and parts[0].lower() in ("jobstreet", "js") and all(p.isdigit() for p in parts[1:]):
+            try:
+                set_site_limits(self.cfg, self.db, "jobstreet", int(parts[1]), int(parts[2]))
+            except ValueError as e:
+                return f"Can't set that: {e}."
+            return (f"JobStreet limits set: <b>{self.cfg.jobstreet.hourly_cap}/hour, "
+                    f"{self.cfg.jobstreet.daily_cap}/day</b> (within the overall limits).")
         if len(parts) == 2 and all(p.isdigit() for p in parts):
             try:
                 set_limits(self.cfg, self.db, int(parts[0]), int(parts[1]))
@@ -402,10 +452,14 @@ class Notifier:
                     f"{int(a.delay_seconds[0])}–{int(a.delay_seconds[1])} s gap between submissions.\n"
                     "MCF asks job seekers to avoid mass applications, so keep this sensible.")
         ramp = f" (rising weekly to {max(a.ramp)})" if a.ramp else ""
+        js = self.cfg.jobstreet
+        js_line = (f"\nJobStreet: <b>{js.hourly_cap}/hour, {js.daily_cap}/day</b>; change with "
+                   f"<code>/limits jobstreet &lt;h&gt; &lt;d&gt;</code> (max {MAX_JS_HOURLY}/{MAX_JS_DAILY})."
+                   if js.enabled else "")
         return (f"Current limits: <b>{a.hourly_cap}/hour, {Pacer(a, self.db).daily_cap()}/day</b>"
                 f"{ramp}, active {a.active_hours[0]:%H:%M}–{a.active_hours[1]:%H:%M}.\n"
                 f"Change with <code>/limits &lt;per hour&gt; &lt;per day&gt;</code>, e.g. "
-                f"<code>/limits 6 30</code> (max {MAX_HOURLY}/hour, {MAX_DAILY}/day).")
+                f"<code>/limits 6 30</code> (max {MAX_HOURLY}/hour, {MAX_DAILY}/day).{js_line}")
 
     def mode_text(self, changed: bool = False) -> str:
         mode = self.cfg.apply.mode
@@ -473,18 +527,21 @@ class Notifier:
         if kind == "q":
             key, _, answer = rest.partition(":")
             stored = self.db.get_state(f"tg:q:{key}")
-            if not stored or answer not in ("yes", "no"):
+            if not stored:
                 self.api.answer_callback(cb["id"], "Unknown question")
                 return "ignored an unknown question"
             question = json.loads(stored)["question"]
-            bank = AnswerBank(self.cfg.apply.answers_path)
-            bank.add(question, answer)
-            released = Q.refresh_answers(self.db, bank)
-            note = f" · {len(released)} job(s) queued" if released else ""
-            self.api.edit(self.chat_id, message["message_id"],
-                          f"{original}\n\n<b>→ answered {answer}{note}</b>")
-            self.api.answer_callback(cb["id"], f"Saved: {answer}")
-            return f"answered {answer}: {question}"
+            if answer.isdigit():
+                options = Q.question_options(self.db, question)
+                if int(answer) >= len(options):
+                    self.api.answer_callback(cb["id"], "Unknown option")
+                    return "ignored an unknown option"
+                answer = options[int(answer)]
+            elif answer not in ("yes", "no"):
+                self.api.answer_callback(cb["id"], "Unknown answer")
+                return "ignored an unknown answer"
+            return self._save_answer(question, answer, message["message_id"], original,
+                                     lambda text: self.api.answer_callback(cb["id"], text))
 
         self.api.answer_callback(cb["id"])
         return "ignored an unknown button"
@@ -518,3 +575,7 @@ def job_card(job) -> str:
     return (f"<b>{escape(job['title'])}</b>\n{escape(job['company_name'])}{salary}{exp}\n"
             f"Score {job['score']}{fresh} · {LABELS.get(source, source)}\nSkills: {escape(skills)}\n"
             f'<a href="{escape(job["url"])}">View on {SITE_NAMES.get(source, source)}</a>')
+
+
+def _rows(items: list, per_row: int) -> list[list]:
+    return [items[i:i + per_row] for i in range(0, len(items), per_row)]

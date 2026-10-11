@@ -1,11 +1,14 @@
-"""Your saved answers to employers' yes/no screening questions (answers.yml).
+"""Your saved answers to employers' screening questions (answers.yml).
 
-Answers only ever come from this file. A question with no confident match is never
-guessed: the job waits in `needs_input` until you answer it with `mcf-apply answer`.
+MCF asks yes/no questions. JobStreet employers also ask multiple-choice and free-text ones,
+so an answer is any text: "yes"/"no", an option's wording ("1-2 years"), or a typed answer.
+Answers only ever come from this file. A question with no confident match is never guessed:
+the job waits in `needs_input` until you answer it (Telegram card or `mcf-apply answer`).
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -16,12 +19,12 @@ import yaml
 # Employers word the same question slightly differently; this catches small edits
 # (punctuation, a changed word) without matching questions that mean something else.
 MATCH_THRESHOLD = 0.92
-VALID_ANSWERS = ("yes", "no")
 
 HEADER = """\
-# Your answers to employers' yes/no screening questions on MyCareersFuture.
+# Your answers to employers' screening questions (MyCareersFuture and JobStreet).
 # These are sent to employers as your answers, so keep them truthful.
-# Add new ones with:  mcf-apply answer <question-id> yes|no
+# yes/no questions: yes or no. Multiple choice: the option's wording. Free text: your answer.
+# Add new ones from Telegram (/questions) or with:  mcf-apply answer <number> <answer>
 """
 
 
@@ -30,14 +33,19 @@ def normalise(question: str) -> str:
     return re.sub(r"\s+", " ", q).strip()
 
 
+def question_key(question: str) -> str:
+    """A short stable id for a question, used in Telegram buttons and state keys."""
+    return hashlib.sha1(normalise(question).encode()).hexdigest()[:12]
+
+
 def _as_answer(value: object) -> str:
     # YAML reads bare yes/no as booleans.
     if isinstance(value, bool):
         return "yes" if value else "no"
-    answer = str(value).strip().lower()
-    if answer not in VALID_ANSWERS:
-        raise ValueError(f"answer must be yes or no, got {value!r}")
-    return answer
+    answer = str(value).strip()
+    if not answer:
+        raise ValueError("answer is empty")
+    return answer.lower() if answer.lower() in ("yes", "no") else answer
 
 
 @dataclass

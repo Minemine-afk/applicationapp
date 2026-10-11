@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from mcf_autoapply.config import Config
 from mcf_autoapply.db import STATUS_NEW, Database
-from mcf_autoapply.pipeline.answers import AnswerBank
+from mcf_autoapply.pipeline.answers import AnswerBank, question_key
 from mcf_autoapply.sources import source_of
 
 # Application states (DESIGN.md §3.8).
@@ -145,6 +145,18 @@ def unanswered_questions(db: Database) -> dict[str, list[str]]:
             if a is None:
                 waiting.setdefault(q, []).append(f"{app['title']} ({app['company_name']})")
     return waiting
+
+
+def remember_question_options(db: Database, questions: list[dict]) -> None:
+    """Keep the options an employer's form offered, so Telegram can show them as buttons."""
+    for q in questions:
+        if q.get("options"):
+            db.set_state(f"q:options:{question_key(q['question'])}", json.dumps(q["options"]))
+
+
+def question_options(db: Database, question: str) -> list[str]:
+    value = db.get_state(f"q:options:{question_key(question)}")
+    return json.loads(value) if value else []
 
 
 def _mcf_says_applied(db: Database, job) -> bool:

@@ -100,6 +100,7 @@ def run(
             result.stopped = "paused: CAPTCHA (log in and check the site, then /resume)"
             break
         if outcome.state == Q.NEEDS_INPUT:
+            Q.remember_question_options(db, outcome.questions or [])
             questions = [q["question"] for q in outcome.questions or []]
             db.update_application(app["job_uuid"], state=Q.NEEDS_INPUT, questions=questions,
                                   answers=[None] * len(questions), screenshot=outcome.screenshot,

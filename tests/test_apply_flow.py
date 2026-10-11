@@ -33,8 +33,8 @@ def test_answer_bank_reads_yaml_booleans_and_rejects_junk(tmp_path):
     path = tmp_path / "answers.yml"
     path.write_text("- question: Can you work weekends?\n  answer: yes\n")
     assert AnswerBank(path).lookup("Can you work weekends?") == "yes"
-    path.write_text("- question: Can you work weekends?\n  answer: maybe\n")
-    with pytest.raises(ValueError, match="entry 1"):
+    path.write_text("- question: Can you work weekends?\n  answer: ''\n")
+    with pytest.raises(ValueError, match="entry 1"):      # an empty answer is never valid
         AnswerBank(path)
 
 

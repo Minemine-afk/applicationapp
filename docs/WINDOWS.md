@@ -48,7 +48,8 @@ Open your bot in Telegram. Type `/` to see the commands.
 | `/login` | Logs in to MyCareersFuture. A Singpass QR arrives with an **Open in Singpass app** button: tap it and approve. Fresh QRs follow every minute until you're in. |
 | `/mode` | Choose how it applies: **🧪 Dry run** (fills forms, sends you screenshots, never submits), **✋ Manual** (only jobs you tap Apply on), **🤖 Auto** (also applies to high-scoring jobs by itself). Starts in dry run. |
 | `/jobs` | The best jobs you haven't applied to, with **Apply** and **Skip** buttons. `/jobs 10` shows 10. |
-| `/questions` | Employers' yes/no screening questions waiting for you. Answer truthfully: they go to employers. |
+| `/questions` | Employers' screening questions waiting for you: tap Yes/No or an option, or reply to the card with your answer. Answer truthfully: they go to employers. |
+| `/login jobstreet` | If JobStreet is turned on in `config.yml`: opens its sign-in in a window on the PC for you to log in. |
 | `/run` | Search and apply now, instead of waiting for the hourly run. |
 | `/apply` | Apply to the queue now, without searching first (faster). |
 | `/limits` | Show or set how many to apply per hour and per day, e.g. `/limits 6 30`. |
@@ -90,3 +91,6 @@ already applied to (even by hand), and reposts of them, are skipped automaticall
   ```
   Setup is safe to re-run: it keeps your settings and answers.
 - **Send the developer a failure:** the screenshot and page file are in `data\screenshots`.
+- **JobStreet:** off by default (its rules forbid automation; see README → JobStreet). To turn it
+  on, open `notepad config.yml`, set `enabled: true` under `jobstreet:`, add `sources: [mcf, jobstreet]`
+  to a search, restart mcf-apply, then send `/login jobstreet`.

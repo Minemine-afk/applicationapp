@@ -1,7 +1,8 @@
 # applicationapp
 
-MCF Auto-Apply finds, ranks and applies to jobs on [MyCareersFuture](https://www.mycareersfuture.gov.sg).
-You approve each application or set rules for automatic approval.
+MCF Auto-Apply finds, ranks and applies to jobs on [MyCareersFuture](https://www.mycareersfuture.gov.sg),
+and optionally [JobStreet](https://sg.jobstreet.com). You approve each application or set rules
+for automatic approval.
 See [DESIGN.md](DESIGN.md) for the architecture and build plan.
 
 **Status:** discovery, filtering, ranking and applying (with a dry-run mode) are built. AI scoring
@@ -114,10 +115,11 @@ also makes mcf-apply start when you log in. Then keep `mcf-apply serve` running 
 | `/login` | Singpass QR with an **Open in Singpass app** button; fresh QRs every minute until approved |
 | `/mode` | 🧪 dry run / ✋ manual / 🤖 auto (stored in the database; overrides `config.yml`) |
 | `/jobs [n]` | Best jobs not applied to yet, with **Apply / Skip** |
-| `/questions` | Unanswered screening questions with **Yes / No**; answers saved to `answers.yml` |
+| `/questions` | Unanswered screening questions: **Yes / No** or one button per option; reply to the card for free-text ones. Answers are saved to `answers.yml` |
 | `/run` | Search and apply now |
 | `/apply` | Apply to the queue now, without searching first |
-| `/limits [h d]` | Show or set the per-hour and per-day caps (max 10/60) |
+| `/limits [h d]` | Show or set the per-hour and per-day caps (max 10/60); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
+| `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in |
 | `/queue`, `/status` | Queue, today's count, pause state |
 | `/pause`, `/resume` | Stop or restart submissions |
 
@@ -146,6 +148,36 @@ submissions pause. Only the linked chat is obeyed. `/login` and `/run` need `mcf
 
 MCF's own guidance is to "avoid mass applications and focus on roles where you can genuinely
 add value", so keep the threshold meaningful.
+
+## JobStreet (optional)
+
+JobStreet can be added as a second source. **Read this first:** JobStreet's robots.txt disallows
+the search endpoint this uses and its terms forbid automated applications, so an account doing
+this can be suspended. It is off by default; turn it on only if you accept that. (Indeed is not
+supported: it blocks automated requests outright.)
+
+To turn it on, set `jobstreet.enabled: true` in `config.yml` and add `sources: [mcf, jobstreet]`
+to the searches you want on both sites. Then:
+
+- `/login jobstreet` opens JobStreet's sign-in in a browser window on the PC. Sign in there
+  (email + code, or Google); nothing is typed for you. The session is saved like MCF's.
+- JobStreet jobs appear in `/jobs` cards with a **JobStreet** badge. Only **Quick apply** jobs
+  are applied to; ones that send you to the employer's own site are marked `external`.
+- Employer questions are only visible inside the form. A job whose questions aren't all in
+  `answers.yml` is parked as `needs_input` and the questions arrive in Telegram with option
+  buttons (or a reply prompt for free-text ones). Answer, and it's queued again.
+- JobStreet has its own caps on top of the overall ones: 2/hour and 8/day by default
+  (`/limits jobstreet h d`, max 5/20). JobStreet jobs are never auto-approved unless
+  `jobstreet.allow_auto: true`.
+- Runs that include JobStreet jobs open a visible browser window (its bot check passes far more
+  often that way). Set `jobstreet.headless: true` to hide it.
+- Your JobStreet applied-jobs page is read before each run, so anything you applied to by hand
+  there, and reposts of it on either site, are skipped.
+- If JobStreet starts blocking searches (403), they pause for an hour and you get one alert.
+
+The apply-form hooks (`src/mcf_autoapply/jobstreet/selectors.py`) come from SEEK's standard
+flow, which JobStreet runs on, not from inspecting JobStreet logged in. Expect the first dry run
+to need adjustments: send the screenshots and the `.html` saved next to them.
 
 ## Home server
 
