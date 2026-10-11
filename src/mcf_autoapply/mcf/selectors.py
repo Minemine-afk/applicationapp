@@ -12,6 +12,12 @@ SINGPASS_BUTTON = '[data-testid="login-with-singpass"]'
 SINGPASS_QR = "#ndi-qr-canvas"
 SINGPASS_REFRESH_TEXT = "Refresh QR Code"         # shown when a QR expires (~1 min)
 
+# Applied Jobs page: it loads your applications with a GraphQL query named below, in pages
+# of `limit` from `skip`; the response holds applications[].job.uuid, title, employerName,
+# statusDescription and submittedOn.
+APPLIED_JOBS_URL = HOME_URL + "applied-jobs"
+APPLIED_JOBS_QUERY = "getJobApplications"
+
 # Job details page
 APPLY_BUTTON = "#job-details-apply-button"        # "Apply", "Applied" or "Apply via Careers@Gov"
 LOGIN_TO_APPLY = "#login_button"                  # shown instead when logged out

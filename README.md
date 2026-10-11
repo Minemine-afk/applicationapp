@@ -136,8 +136,10 @@ submissions pause. Only the linked chat is obeyed. `/login` and `/run` need `mcf
   a random 45–120 s gap. The daily cap starts at 15 and rises weekly to 40 (`ramp`).
 - **Automatic pause:** a CAPTCHA or repeated failures pause all submissions until you run
   `mcf-apply unpause`. The daily cap then restarts at the bottom of the ramp.
-- **No double applying:** one application per job, and jobs MCF already shows as "Applied" are
-  skipped.
+- **No double applying:** before each applying run, your **Applied Jobs** list is read from MCF
+  (including applications you made by hand). Those jobs, and reposts of them (same employer,
+  same title), are never queued, shown as cards or auto-approved; anything already queued for
+  one is marked `already_applied`. The form's "Applied" badge is checked too, as a last resort.
 - **Stuck forms:** if MCF asks for something the tool can't fill (for example missing profile
   details), that job is marked `failed` with a screenshot and the page HTML, and nothing is
   submitted.

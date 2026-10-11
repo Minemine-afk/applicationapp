@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -63,6 +64,18 @@ CREATE TABLE IF NOT EXISTS applications (
     mcf_application_id TEXT
 );
 CREATE INDEX IF NOT EXISTS applications_state ON applications (state);
+
+-- Your applications as MCF lists them (synced from its Applied Jobs page), including ones
+-- made by hand. Jobs here, and reposts of them, are never applied to again.
+CREATE TABLE IF NOT EXISTS applied_on_mcf (
+    job_uuid      TEXT PRIMARY KEY,
+    title         TEXT NOT NULL DEFAULT '',
+    employer      TEXT NOT NULL DEFAULT '',
+    status        TEXT,
+    submitted_on  TEXT,
+    mcf_application_id TEXT,
+    synced_at     TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS state (
     key   TEXT PRIMARY KEY,
@@ -262,6 +275,35 @@ class Database:
         ).fetchone()
         return datetime.fromisoformat(row[0]) if row and row[0] else None
 
+    # --- applications as MCF lists them ---------------------------------------------------
+
+    def upsert_applied_on_mcf(self, uuid: str, title: str = "", employer: str = "",
+                              status: str | None = None, submitted_on: str | None = None,
+                              mcf_application_id: str | None = None) -> bool:
+        """Record an application MCF knows about. Returns True if it was new to us."""
+        new = self.conn.execute(
+            "SELECT 1 FROM applied_on_mcf WHERE job_uuid = ?", (uuid,)).fetchone() is None
+        self.conn.execute(
+            """INSERT INTO applied_on_mcf (job_uuid, title, employer, status, submitted_on,
+               mcf_application_id, synced_at) VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(job_uuid) DO UPDATE SET title = excluded.title,
+               employer = excluded.employer, status = excluded.status,
+               submitted_on = excluded.submitted_on,
+               mcf_application_id = excluded.mcf_application_id, synced_at = excluded.synced_at""",
+            (uuid, title, employer, status, submitted_on, mcf_application_id, _now()))
+        return new
+
+    def applied_on_mcf_uuids(self) -> set[str]:
+        return {r["job_uuid"] for r in self.conn.execute("SELECT job_uuid FROM applied_on_mcf")}
+
+    def applied_on_mcf_keys(self) -> set[str]:
+        """Normalised employer|title of everything applied to, for catching reposts."""
+        return {applied_key(r["employer"], r["title"]) for r in self.conn.execute(
+            "SELECT employer, title FROM applied_on_mcf WHERE title != ''")}
+
+    def applied_on_mcf_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM applied_on_mcf").fetchone()[0]
+
     # --- key/value state ------------------------------------------------------------------
 
     def get_state(self, key: str) -> str | None:
@@ -285,6 +327,12 @@ class Database:
 
     def commit(self) -> None:
         self.conn.commit()
+
+
+def applied_key(employer: str, title: str) -> str:
+    """Same employer + same title = the same opening, whichever uuid it's posted under."""
+    norm = lambda t: re.sub(r"[^a-z0-9]+", " ", (t or "").lower()).strip()   # noqa: E731
+    return f"{norm(employer)}|{norm(title)}"
 
 
 def _iso(d: Any) -> str | None:

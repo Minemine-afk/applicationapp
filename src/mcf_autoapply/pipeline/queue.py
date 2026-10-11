@@ -48,6 +48,14 @@ def approve(
             out.append(Decision(job["uuid"], job["title"], existing["state"], "already queued"))
             continue
 
+        if _mcf_says_applied(db, job):
+            if existing:
+                db.update_application(job["uuid"], state=ALREADY_APPLIED)
+            else:
+                db.create_application(job["uuid"], ALREADY_APPLIED, "mcf", [], [])
+            out.append(Decision(job["uuid"], job["title"], ALREADY_APPLIED,
+                                "MCF lists this (or the same job at this employer) as applied"))
+            continue
         raw = json.loads(job["raw"])
         if raw.get("psdUrl"):
             state, questions, answers, note = EXTERNAL, [], [], "apply on Careers@Gov"
@@ -97,7 +105,7 @@ def auto_approve(
     for job in db.jobs([STATUS_NEW], sort="score"):
         if job["score"] is None or job["score"] < cfg.apply.auto_apply_min_score:
             break   # sorted by score, so nothing further qualifies
-        if db.application(job["uuid"]):
+        if db.application(job["uuid"]) or _mcf_says_applied(db, job):
             continue
         details = json.loads(job["rank_details"] or "{}")
         if cfg.apply.auto_apply_fresh_grad_only and not details.get("fresh_grad"):
@@ -131,3 +139,8 @@ def unanswered_questions(db: Database) -> dict[str, list[str]]:
             if a is None:
                 waiting.setdefault(q, []).append(f"{app['title']} ({app['company_name']})")
     return waiting
+
+
+def _mcf_says_applied(db: Database, job) -> bool:
+    from mcf_autoapply.mcf.applied import is_already_applied   # avoids an import cycle
+    return is_already_applied(db, job)

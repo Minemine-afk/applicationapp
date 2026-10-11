@@ -24,13 +24,16 @@ class RunResult:
     dry_run: bool
     outcomes: list[tuple[str, Outcome]] = field(default_factory=list)   # (title, outcome)
     stopped: str | None = None   # why the run ended early, if it did
+    skipped_applied: list[str] = field(default_factory=list)   # titles MCF already lists
 
 
 def pending(db: Database, dry_run: bool, limit: int | None = None) -> list:
     """Approved jobs to process, best score first. Live runs also take dry-run passes."""
     states = [Q.APPROVED, Q.FAILED] + ([] if dry_run else [Q.DRY_RUN_OK])
+    applied = db.applied_on_mcf_uuids()
     rows = [r for r in db.applications(states)
-            if r["state"] != Q.FAILED or r["attempts"] < Q.MAX_ATTEMPTS]
+            if (r["state"] != Q.FAILED or r["attempts"] < Q.MAX_ATTEMPTS)
+            and r["job_uuid"] not in applied]
     return rows[:limit] if limit else rows
 
 
@@ -83,6 +86,10 @@ def run(
         if outcome.state == Q.APPLIED:
             fields["submitted_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             fields["mcf_application_id"] = outcome.application_id
+        if outcome.state in (Q.APPLIED, Q.ALREADY_APPLIED):
+            # Remember it the way the MCF sync does, so reposts are skipped too.
+            db.upsert_applied_on_mcf(app["job_uuid"], app["title"], app["company_name"],
+                                     mcf_application_id=outcome.application_id)
         db.update_application(app["job_uuid"], **fields)
         db.commit()
 

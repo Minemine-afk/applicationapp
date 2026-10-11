@@ -12,7 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from mcf_autoapply.config import Config, get_env
-from mcf_autoapply.db import STATUS_NEW, Database
+from mcf_autoapply.db import STATUS_NEW, Database, applied_key
 from mcf_autoapply.overrides import MAX_DAILY, MAX_HOURLY, MODES, set_limits, set_mode
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
@@ -112,11 +112,15 @@ class Notifier:
         t, a = self.cfg.telegram, self.cfg.apply
         upper = a.auto_apply_min_score if a.mode == "auto" and not any_score else 101
         out = []
+        applied_uuids, applied_keys = self.db.applied_on_mcf_uuids(), self.db.applied_on_mcf_keys()
         for job in self.db.jobs([STATUS_NEW], sort="score"):
             if job["score"] is None or job["score"] < t.quick_review_min_score:
                 break
             if job["score"] >= upper or self.db.application(job["uuid"]):
                 continue
+            if (job["uuid"] in applied_uuids
+                    or applied_key(job["company_name"], job["title"]) in applied_keys):
+                continue   # MCF says you've applied (maybe by hand, or to a repost of it)
             if not include_sent and self.db.get_state(f"tg:job:{job['uuid']}"):
                 continue
             out.append(job)
@@ -208,8 +212,9 @@ class Notifier:
     def run_summary(self, new_passed: int = 0, auto_approved: int = 0, result=None) -> bool:
         """One message per run, only when something happened."""
         outcomes = result.outcomes if result else []
+        skipped = getattr(result, "skipped_applied", []) if result else []
         counts = Counter(o.state for _, o in outcomes)
-        if not (outcomes or auto_approved):
+        if not (outcomes or auto_approved or skipped):
             return False
         lines = [f"📋 <b>{'Dry run' if result and result.dry_run else 'Run'} summary</b>"]
         if new_passed:
@@ -220,6 +225,10 @@ class Notifier:
             icon = {Q.APPLIED: "✅", Q.DRY_RUN_OK: "🧪", Q.FAILED: "❌"}.get(o.state, "•")
             detail = f" — {escape(o.detail)}" if o.state == Q.FAILED else ""
             lines.append(f"{icon} {escape(title)}{detail}")
+        if skipped:
+            lines.append(f"⏭ Skipped {len(skipped)} you'd already applied to on MCF: "
+                         + "; ".join(escape(t) for t in skipped[:5])
+                         + (" …" if len(skipped) > 5 else ""))
         if counts:
             lines.append(", ".join(f"{n} {s}" for s, n in counts.items()))
         if result and result.dry_run and counts.get(Q.DRY_RUN_OK):
@@ -418,6 +427,8 @@ class Notifier:
                   (Q.DRY_RUN_OK, "🧪 Dry run passed"), (Q.FAILED, "❌ Failed"),
                   (Q.APPLIED, "✅ Applied (latest)")]
         lines = []
+        if n := self.db.applied_on_mcf_count():
+            lines.append(f"📋 MCF lists <b>{n}</b> applications of yours; those jobs are skipped.")
         for state, label in groups:
             rows = self.db.applications([state], limit=5)
             if not rows:

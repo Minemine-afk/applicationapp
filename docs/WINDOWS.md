@@ -64,6 +64,9 @@ What arrives without asking:
 - **Run summaries** with screenshots of dry runs and failures
 - **Alerts** when the login expires (send `/login`) or submissions pause
 
+Before each applying run it reads your **Applied Jobs** list from MyCareersFuture, so jobs you've
+already applied to (even by hand), and reposts of them, are skipped automatically.
+
 ### A good first week
 
 1. `/login` and approve in the Singpass app.

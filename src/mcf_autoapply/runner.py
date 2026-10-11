@@ -53,11 +53,16 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
 
     log(f"{'Submitting' if live else 'Dry run (no submissions)'}: up to {len(jobs)} job(s)…")
     with open_page(cfg.apply, headless=headless) as page:
+        skipped = sync_applied_jobs(page, db, log)
+        if skipped:
+            log(f"Skipped {len(skipped)} queued job(s) MCF already lists as applied: "
+                + "; ".join(skipped[:5]))
         result = A.run(
             cfg, db,
             lambda: Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live),
             dry_run=not live, limit=limit, on_outcome=show,
         )
+    result.skipped_applied = skipped
     if result.stopped:
         log(f"[yellow]Stopped: {result.stopped}[/yellow]")
     return result
@@ -90,6 +95,22 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
     result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log)
     finish_notifications(notifier, result, log, len(found.new_passed),
                          sum(d.state == Q.APPROVED for d in decisions))
+
+
+def sync_applied_jobs(page, db: Database, log: Log) -> list[str]:
+    """Refresh MCF's Applied Jobs list before applying; a failure here never blocks a run."""
+    from mcf_autoapply.mcf.applied import AppliedSyncError, sync_applied
+
+    try:
+        result = sync_applied(page, db)
+    except AppliedSyncError as e:
+        log(f"[yellow]Couldn't read MCF's Applied Jobs ({e}); using what's known.[/yellow]")
+        return []
+    except Exception as e:
+        log(f"[yellow]Applied Jobs sync failed: {type(e).__name__}: {e}[/yellow]")
+        return []
+    log(f"MCF lists {result.total} application(s); {result.new} new to us.")
+    return result.released
 
 
 def apply_only(cfg: Config, db: Database, notifier: Notifier, log: Log,
