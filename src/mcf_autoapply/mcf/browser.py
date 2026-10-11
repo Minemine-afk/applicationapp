@@ -39,10 +39,15 @@ class LoginQR:
     link: str | None        # what it encodes: https://app.singpass.gov.sg/qrlogin?...
 
 
+def on_mcf(page: Page, home_url: str = S.HOME_URL) -> bool:
+    return page.url.startswith(home_url.rstrip("/"))
+
+
 def logged_in(page: Page, home_url: str = S.HOME_URL) -> bool:
+    """On MCF, the menu bar has loaded, and it has no "Log In" button."""
     try:
-        return (page.url.startswith(home_url)
-                and page.locator(S.NAVBAR_APPLIED_JOBS).count() > 0
+        return (on_mcf(page, home_url)
+                and page.locator(S.NAVBAR_SEARCH_JOBS).count() > 0
                 and page.locator(S.NAVBAR_LOGIN).count() == 0)
     except Exception:   # page mid-navigation during the Singpass redirect
         return False
@@ -50,7 +55,8 @@ def logged_in(page: Page, home_url: str = S.HOME_URL) -> bool:
 
 def is_logged_in(page: Page, home_url: str = S.HOME_URL) -> bool:
     page.goto(home_url, wait_until="domcontentloaded")
-    page.locator(f"{S.NAVBAR_LOGIN}, {S.NAVBAR_APPLIED_JOBS}").first.wait_for(timeout=30_000)
+    page.locator(S.NAVBAR_SEARCH_JOBS).first.wait_for(timeout=30_000)
+    page.wait_for_timeout(1500)   # let the login state settle before reading the menu
     return logged_in(page, home_url)
 
 
@@ -75,13 +81,24 @@ def capture_qr(page: Page) -> LoginQR:
 def login_via_qr(
     page: Page, on_qr: Callable[[LoginQR, int], None], home_url: str = S.HOME_URL,
     timeout_s: int = LOGIN_TIMEOUT_S, max_qrs: int = 10, poll_ms: int = 2000,
+    on_unclear: Callable[[bytes, str], None] | None = None, unclear_after_s: float = 20,
 ) -> bool:
     """Go to the Singpass QR page and wait for you to approve it in the Singpass app.
 
     `on_qr(qr, n)` is called with each new QR. Singpass QRs expire after about a minute;
     the expired one is refreshed automatically, up to `max_qrs` QRs in total.
+    `on_unclear(screenshot, note)` is called (once each) if the browser leaves Singpass but
+    doesn't look logged in, and on timeout, so you can see what the page shows.
     Your Singpass password is never typed: approval happens on your phone.
     """
+
+    def report(note: str) -> None:
+        if on_unclear:
+            try:
+                on_unclear(page.screenshot(full_page=False), note)
+            except Exception:
+                pass
+
     if is_logged_in(page, home_url):
         return True
     page.locator(S.NAVBAR_LOGIN).first.click()
@@ -90,9 +107,21 @@ def login_via_qr(
 
     deadline = time.monotonic() + timeout_s
     last_link, sent = None, 0
+    left_singpass_at, reported = None, False
     while time.monotonic() < deadline:
         if logged_in(page, home_url):
-            return True
+            # Read twice, a moment apart, so a half-loaded menu isn't mistaken for a login.
+            page.wait_for_timeout(1000)
+            if logged_in(page, home_url):
+                return True
+        if on_mcf(page, home_url):
+            left_singpass_at = left_singpass_at or time.monotonic()
+            if not reported and time.monotonic() - left_singpass_at > unclear_after_s:
+                report("Back on MyCareersFuture after Singpass, but I can't tell if you're "
+                       "logged in. This is what the browser shows.")
+                reported = True
+        else:
+            left_singpass_at = None
         try:
             refresh = page.get_by_text(S.SINGPASS_REFRESH_TEXT)
             if refresh.count() and refresh.first.is_visible():
@@ -108,4 +137,5 @@ def login_via_qr(
         except Exception:   # the page changed under us (redirect after approval)
             pass
         page.wait_for_timeout(poll_ms)
+    report("Login timed out. This is what the browser shows.")
     return False

@@ -107,9 +107,17 @@ def login(cfg: Config, log: Log, notifier: Notifier | None = None,
                 log(f"[yellow]Telegram: {err}[/yellow]")
             notifier.errors.clear()
 
+    def on_unclear(png: bytes, note: str) -> None:
+        log(f"[yellow]{note}[/yellow]")
+        if notifier and notifier.enabled:
+            try:
+                notifier.api.send_photo(notifier.chat_id, png, f"🔍 {note}")
+            except Exception as e:
+                log(f"[yellow]Telegram: {e}[/yellow]")
+
     log("Opening the Singpass login. Waiting up to 10 minutes for you to approve it…")
     with open_page(cfg.apply, headless=False if headless is None else headless) as page:
-        return login_via_qr(page, on_qr)
+        return login_via_qr(page, on_qr, on_unclear=on_unclear)
 
 
 SERVE_LOCK_PORT = 47391

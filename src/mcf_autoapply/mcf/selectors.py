@@ -15,8 +15,12 @@ SINGPASS_REFRESH_TEXT = "Refresh QR Code"         # shown when a QR expires (~1 
 # Job details page
 APPLY_BUTTON = "#job-details-apply-button"        # "Apply", "Applied" or "Apply via Careers@Gov"
 LOGIN_TO_APPLY = "#login_button"                  # shown instead when logged out
-NAVBAR_LOGIN = "#navbar-login"
-NAVBAR_APPLIED_JOBS = "#navbar-applied-jobs"      # only shown when logged in
+NAVBAR_LOGIN = "#navbar-login"                    # only when logged out
+NAVBAR_SEARCH_JOBS = "#navbar-search-jobs"        # always in the menu bar, once it has loaded
+# Note: "Applied Jobs" (#navbar-applied-jobs) lives inside the account drop-down and isn't on
+# the page until that menu is opened, so it can't be used to tell whether you're logged in.
+NAVBAR_APPLIED_JOBS = "#navbar-applied-jobs"
+MCF_ORIGIN = "https://www.mycareersfuture.gov.sg"
 APPLIED_TEXT = "Applied"
 CAREERS_GOV_TEXT = "Careers@Gov"
 CLOSED_TEXTS = ("Applications have closed for this job", "Applications are unavailable till")
