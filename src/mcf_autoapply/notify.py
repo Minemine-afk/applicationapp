@@ -13,7 +13,8 @@ from zoneinfo import ZoneInfo
 from mcf_autoapply.config import Config, get_env
 from mcf_autoapply.db import STATUS_NEW, Database, applied_key
 from mcf_autoapply.overrides import (MAX_DAILY, MAX_HOURLY, MAX_JS_DAILY, MAX_JS_HOURLY, MODES,
-                                     set_limits, set_mode, set_site_limits)
+                                     set_jobstreet_enabled, set_limits, set_mode,
+                                     set_site_limits)
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank, question_key
@@ -35,6 +36,7 @@ COMMAND_HELP = {
     "queue": "What's queued, applied or failed",
     "mode": "Switch dry run / manual / auto",
     "limits": "Show or set how many to apply per hour and per day",
+    "jobstreet": "Turn JobStreet on or off (/jobstreet on)",
     "pause": "Stop submitting until /resume",
     "resume": "Start submitting again",
     "help": "All commands",
@@ -382,6 +384,7 @@ class Notifier:
             "/questions": self._cmd_questions,
             "/mode": self._cmd_mode,
             "/limits": self._cmd_limits,
+            "/jobstreet": self._cmd_jobstreet,
             "/pause": self._cmd_pause,
             "/resume": self._cmd_resume,
         }
@@ -390,7 +393,9 @@ class Notifier:
         handlers = handlers or self._handlers
         extra = {"login": "Log in to MCF with Singpass (/login jobstreet for JobStreet)",
                  "run": "Search and apply now",
-                 "apply": "Apply to the queue now, without searching"}
+                 "apply": "Apply to the queue now, without searching",
+                 "update": "Install the latest version and restart",
+                 "restart": "Restart mcf-apply"}
         lines = ["<b>Commands</b>"]
         lines += [f"/{n} — {d}" for n, d in extra.items() if f"/{n}" in handlers]
         lines += [f"/{n} — {d}" for n, d in COMMAND_HELP.items()]
@@ -403,7 +408,9 @@ class Notifier:
         if self.api is None:
             return
         items = ({"login": "Log in to MCF with Singpass", "run": "Search and apply now",
-                  "apply": "Apply to the queue now, without searching"}
+                  "apply": "Apply to the queue now, without searching",
+                  "update": "Install the latest version and restart",
+                  "restart": "Restart mcf-apply"}
                  if serve else {}) | COMMAND_HELP
         try:
             self.api.call("setMyCommands", commands=[
@@ -460,6 +467,27 @@ class Notifier:
                 f"{ramp}, active {a.active_hours[0]:%H:%M}–{a.active_hours[1]:%H:%M}.\n"
                 f"Change with <code>/limits &lt;per hour&gt; &lt;per day&gt;</code>, e.g. "
                 f"<code>/limits 6 30</code> (max {MAX_HOURLY}/hour, {MAX_DAILY}/day).{js_line}")
+
+    JOBSTREET_WARNING = (
+        "⚠️ JobStreet's robots.txt disallows the search this uses and its terms forbid automated "
+        "applications, so an account doing this can be suspended. Limits are kept low "
+        "({h}/hour, {d}/day) and JobStreet jobs are never auto-approved unless you allow it.")
+
+    def _cmd_jobstreet(self, args: str) -> str:
+        js = self.cfg.jobstreet
+        want = args.strip().lower()
+        if want in ("on", "enable", "yes"):
+            set_jobstreet_enabled(self.cfg, self.db, True)
+            return ("🟠 <b>JobStreet is on.</b> Searches now include it from the next run.\n"
+                    + self.JOBSTREET_WARNING.format(h=js.hourly_cap, d=js.daily_cap)
+                    + "\n\nNext: send /login jobstreet and sign in in the window that opens on the PC. "
+                      "Stay in dry run for the first JobStreet jobs and check the screenshots.")
+        if want in ("off", "disable", "no"):
+            set_jobstreet_enabled(self.cfg, self.db, False)
+            return "⚪ JobStreet is off. Queued JobStreet jobs stay queued but won't be applied to."
+        state = "on" if js.enabled else "off"
+        return (f"JobStreet is <b>{state}</b>. /jobstreet on or /jobstreet off.\n"
+                + self.JOBSTREET_WARNING.format(h=js.hourly_cap, d=js.daily_cap))
 
     def mode_text(self, changed: bool = False) -> str:
         mode = self.cfg.apply.mode
@@ -549,7 +577,8 @@ class Notifier:
     def status_text(self) -> str:
         pacer = Pacer(self.cfg.apply, self.db)
         counts = self.db.application_counts()
-        lines = [f"<b>Mode</b> {MODE_LABELS[self.cfg.apply.mode]}",
+        lines = [f"<b>Mode</b> {MODE_LABELS[self.cfg.apply.mode]}"
+                 + (" · JobStreet on" if self.cfg.jobstreet.enabled else ""),
                  f"Today {pacer.applied_today()}/{pacer.daily_cap()} · "
                  f"last hour {pacer.applied_last_hour()}/{self.cfg.apply.hourly_cap}"]
         lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]

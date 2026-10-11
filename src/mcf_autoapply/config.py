@@ -25,8 +25,9 @@ SOURCE_NAMES = ("mcf", "jobstreet")
 class Search(_Strict):
     query: str
     also: list[str] = Field(default_factory=list)
-    # Which sites to search. JobStreet is only used when jobstreet.enabled is true.
-    sources: list[Literal["mcf", "jobstreet"]] = Field(default_factory=lambda: ["mcf"])
+    # Which sites to search. Leave it out to search every enabled site (MCF, plus JobStreet
+    # when jobstreet.enabled is true); set it to restrict a search to some sites.
+    sources: list[Literal["mcf", "jobstreet"]] | None = None
 
     def terms(self) -> list[str]:
         return [self.query, *self.also]
@@ -135,6 +136,7 @@ class Config(_Strict):
     telegram: Telegram = Field(default_factory=Telegram)
     serve: Serve = Field(default_factory=Serve)
     jobstreet: JobStreet = Field(default_factory=JobStreet)
+    project_dir: Path = Path(".")     # set by load_config: where config.yml lives (the checkout)
 
     def enabled_sources(self) -> list[str]:
         return ["mcf"] + (["jobstreet"] if self.jobstreet.enabled else [])
@@ -170,6 +172,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     cfg = Config.model_validate(data)
     # Resolve relative paths against the config file, not the current directory.
     base = path.parent
+    cfg.project_dir = base.resolve()
     cfg.db_path = _resolve(base, cfg.db_path)
     for name in ("answers_path", "browser_profile", "browser_executable", "screenshots_dir"):
         setattr(cfg.apply, name, _resolve(base, getattr(cfg.apply, name)))

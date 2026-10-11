@@ -49,7 +49,9 @@ Open your bot in Telegram. Type `/` to see the commands.
 | `/mode` | Choose how it applies: **🧪 Dry run** (fills forms, sends you screenshots, never submits), **✋ Manual** (only jobs you tap Apply on), **🤖 Auto** (also applies to high-scoring jobs by itself). Starts in dry run. |
 | `/jobs` | The best jobs you haven't applied to, with **Apply** and **Skip** buttons. `/jobs 10` shows 10. |
 | `/questions` | Employers' screening questions waiting for you: tap Yes/No or an option, or reply to the card with your answer. Answer truthfully: they go to employers. |
-| `/login jobstreet` | If JobStreet is turned on in `config.yml`: opens its sign-in in a window on the PC for you to log in. |
+| `/jobstreet on` | Turns on JobStreet as a second site (read the warning it shows). `/jobstreet off` turns it off. |
+| `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in. |
+| `/update` | Installs the latest version and restarts. |
 | `/run` | Search and apply now, instead of waiting for the hourly run. |
 | `/apply` | Apply to the queue now, without searching first (faster). |
 | `/limits` | Show or set how many to apply per hour and per day, e.g. `/limits 6 30`. |
@@ -82,7 +84,9 @@ already applied to (even by hand), and reposts of them, are skipped automaticall
   called **mcf-apply** should appear in the taskbar.
 - **Stop it for good:** close the mcf-apply window, and delete `mcf-apply.cmd` from the Startup
   folder (Win+R → `shell:startup`).
-- **Update to the latest version:** close the mcf-apply window, then in PowerShell:
+- **Update to the latest version:** send **/update** to the bot. It pulls the new code,
+  reinstalls, and restarts itself; "🟢 mcf-apply is running" means it's back. If the bot isn't
+  answering at all, do it in PowerShell instead:
   ```powershell
   cd $HOME\applicationapp
   git pull
@@ -91,6 +95,5 @@ already applied to (even by hand), and reposts of them, are skipped automaticall
   ```
   Setup is safe to re-run: it keeps your settings and answers.
 - **Send the developer a failure:** the screenshot and page file are in `data\screenshots`.
-- **JobStreet:** off by default (its rules forbid automation; see README → JobStreet). To turn it
-  on, open `notepad config.yml`, set `enabled: true` under `jobstreet:`, add `sources: [mcf, jobstreet]`
-  to a search, restart mcf-apply, then send `/login jobstreet`.
+- **JobStreet:** off by default (its rules forbid automation; see README → JobStreet). Send
+  **/jobstreet on**, then **/login jobstreet** and sign in in the window that opens on the PC.

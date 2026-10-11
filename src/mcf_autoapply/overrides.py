@@ -9,6 +9,7 @@ MODES = ("dry_run", "manual", "auto")
 MODE_KEY = "override:apply.mode"
 HOURLY_KEY = "override:apply.hourly_cap"
 DAILY_KEY = "override:apply.daily_cap"
+JS_ENABLED_KEY = "override:jobstreet.enabled"
 JS_HOURLY_KEY = "override:jobstreet.hourly_cap"
 JS_DAILY_KEY = "override:jobstreet.daily_cap"
 MAX_HOURLY, MAX_DAILY = 10, 60
@@ -23,6 +24,8 @@ def apply_overrides(cfg: Config, db: Database) -> Config:
     if daily := db.get_state(DAILY_KEY):
         cfg.apply.daily_cap = int(daily)
         cfg.apply.ramp = []   # an explicit daily limit replaces the weekly ramp
+    if (enabled := db.get_state(JS_ENABLED_KEY)) in ("on", "off"):
+        cfg.jobstreet.enabled = enabled == "on"
     if hourly := db.get_state(JS_HOURLY_KEY):
         cfg.jobstreet.hourly_cap = int(hourly)
     if daily := db.get_state(JS_DAILY_KEY):
@@ -59,3 +62,10 @@ def set_mode(cfg: Config, db: Database, mode: str) -> None:
     db.log(None, "mode_changed", {"mode": mode})
     db.commit()
     cfg.apply.mode = mode
+
+
+def set_jobstreet_enabled(cfg: Config, db: Database, enabled: bool) -> None:
+    db.set_state(JS_ENABLED_KEY, "on" if enabled else "off")
+    db.log(None, "jobstreet_toggled", {"enabled": enabled})
+    db.commit()
+    cfg.jobstreet.enabled = enabled

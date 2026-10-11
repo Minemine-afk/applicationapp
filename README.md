@@ -120,6 +120,9 @@ also makes mcf-apply start when you log in. Then keep `mcf-apply serve` running 
 | `/apply` | Apply to the queue now, without searching first |
 | `/limits [h d]` | Show or set the per-hour and per-day caps (max 10/60); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
 | `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in |
+| `/jobstreet on\|off` | Turn the JobStreet source on or off (off by default; see below) |
+| `/update` | Pull the latest version, reinstall and restart (the Windows start script restarts it) |
+| `/restart` | Restart mcf-apply |
 | `/queue`, `/status` | Queue, today's count, pause state |
 | `/pause`, `/resume` | Stop or restart submissions |
 
@@ -156,8 +159,8 @@ the search endpoint this uses and its terms forbid automated applications, so an
 this can be suspended. It is off by default; turn it on only if you accept that. (Indeed is not
 supported: it blocks automated requests outright.)
 
-To turn it on, set `jobstreet.enabled: true` in `config.yml` and add `sources: [mcf, jobstreet]`
-to the searches you want on both sites. Then:
+To turn it on, send **/jobstreet on** to the bot (or set `jobstreet.enabled: true` in
+`config.yml`). Searches then run on both sites unless a search names its own `sources`. Then:
 
 - `/login jobstreet` opens JobStreet's sign-in in a browser window on the PC. Sign in there
   (email + code, or Google); nothing is typed for you. The session is saved like MCF's.

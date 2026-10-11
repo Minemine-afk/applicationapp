@@ -44,7 +44,7 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
     if not dry_run and not live:
         log("[yellow]apply.mode is dry_run, so nothing will be submitted. "
             "Set it to manual or auto in config.yml to apply for real.[/yellow]")
-    jobs = A.pending(db, not live, limit)
+    jobs = A.pending(db, not live, limit, jobstreet=cfg.jobstreet.enabled)
     if not jobs:
         log("Nothing queued. Approve jobs with `mcf-apply approve <ID>`"
             + (" or let auto mode pick them." if cfg.apply.mode == "auto" else "."))
@@ -308,13 +308,15 @@ class TaskRunner:
 
 
 ACTIVITY = {"run": "searching and applying", "apply": "applying",
-            "login": "waiting for your Singpass login"}
+            "login": "waiting for your Singpass login", "update": "updating"}
 
 
 def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
           clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
           run: Callable[[], None] | None = None, do_login: Callable[[], bool] | None = None,
-          max_loops: int | None = None, background: bool = True) -> None:
+          max_loops: int | None = None, background: bool = True,
+          do_update: Callable[[], tuple[str, bool]] | None = None,
+          do_restart: Callable[[], None] | None = None) -> None:
     """A run every interval plus /run and /login, all in the background, so Telegram taps and
     commands are answered immediately, even mid-run.
     """
@@ -374,8 +376,35 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         if ok:
             tasks.submit("run")
 
-    tasks = TaskRunner({"run": run_task, "apply": apply_task, "login": login_task}, log,
-                       background)
+    def update_task() -> None:
+        from mcf_autoapply import updater
+
+        with worker_notifier() as (wdb, wn):
+            summary, changed = (do_update or (lambda: updater.run_update(cfg.project_dir)))()
+            log(summary)
+            wn._send(summary)
+            if changed:
+                wn._send("♻️ Restarting to load the update. Back in about a minute "
+                         "(\"🟢 mcf-apply is running\" means it worked).")
+        if changed:
+            (do_restart or updater.restart)()
+
+    def restart_task() -> None:
+        with worker_notifier() as (wdb, wn):
+            wn._send("♻️ Restarting. Back in about a minute.")
+        (do_restart or __import__("mcf_autoapply.updater").updater.restart)()
+
+    tasks = TaskRunner({"run": run_task, "apply": apply_task, "login": login_task,
+                        "update": update_task, "restart": restart_task}, log, background)
+
+    def update_cmd(args: str) -> str:
+        return {"started": "Checking for an update…",
+                "queued": "The update will start as soon as the current task finishes.",
+                "already": "An update is already in progress."}[tasks.submit("update", first=True)]
+
+    def restart_cmd(args: str) -> str | None:
+        return {"started": None, "queued": "Restarting as soon as the current task finishes.",
+                "already": "Already restarting."}[tasks.submit("restart", first=True)]
 
     def run_cmd(args: str) -> str:
         return {"started": "Starting a run now (search, then apply). Results arrive here "
@@ -405,7 +434,8 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
                 "already": "A login is already in progress or queued."}[
                     tasks.submit("login", first=True)]
 
-    commands = {"/run": run_cmd, "/apply": apply_cmd, "/login": login_cmd}
+    commands = {"/run": run_cmd, "/apply": apply_cmd, "/login": login_cmd,
+                "/update": update_cmd, "/restart": restart_cmd}
     notifier.register_commands(serve=True)
     notifier.clear_login_qr()   # a QR from before a restart can't be approved any more
     notifier._send("🟢 <b>mcf-apply is running.</b> Searching for jobs now; "

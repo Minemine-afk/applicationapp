@@ -51,7 +51,7 @@ def discover(
 
     try:
         for search in cfg.searches:
-            for name in search.sources:
+            for name in search.sources or cfg.enabled_sources():
                 src = sources.get(name)
                 if src is None or name not in enabled or name in skip:
                     continue

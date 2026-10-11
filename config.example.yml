@@ -38,18 +38,15 @@ profile:
     - Cloudflare
     - OCR
 
-# Each search can name the sites to search: mcf (always available) and jobstreet
-# (needs jobstreet.enabled below). JobStreet searches are fuzzier, so fewer terms are used.
+# Searches run on every enabled site (MCF; JobStreet too once it's on, via /jobstreet on
+# or jobstreet.enabled below). Add `sources: [mcf]` to a search to keep it to one site.
 searches:
   - query: "software engineer"
     also: ["software developer", "backend engineer", "full stack engineer", "platform engineer"]
-    sources: [mcf, jobstreet]
   - query: "AI engineer"
     also: ["machine learning engineer", "ML engineer", "LLM engineer", "MLOps engineer"]
-    sources: [mcf, jobstreet]
   - query: "devops engineer"
     also: ["site reliability engineer", "cloud engineer", "infrastructure engineer"]
-    sources: [mcf, jobstreet]
   - query: "data analyst"
     also: ["data engineer", "data scientist", "business intelligence", "analytics"]
   - query: "fresh graduate software"
@@ -203,7 +200,8 @@ telegram:
 jobstreet:
   # JobStreet (sg.jobstreet.com). OFF by default. Its robots.txt disallows the search API it
   # uses and its terms forbid automated applications: an account doing this can be suspended.
-  # Turn it on only if you accept that. Limits here are per JobStreet, on top of apply.*.
+  # Turn it on only if you accept that: /jobstreet on in Telegram, or enabled: true here.
+  # Limits here are per JobStreet, on top of apply.*.
   enabled: false
   where: Singapore
   page_size: 30

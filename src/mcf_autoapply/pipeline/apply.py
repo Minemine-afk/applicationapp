@@ -28,13 +28,15 @@ class RunResult:
     skipped_applied: list[str] = field(default_factory=list)   # titles MCF already lists
 
 
-def pending(db: Database, dry_run: bool, limit: int | None = None) -> list:
-    """Approved jobs to process, best score first. Live runs also take dry-run passes."""
+def pending(db: Database, dry_run: bool, limit: int | None = None, jobstreet: bool = True) -> list:
+    """Approved jobs to process, best score first. Live runs also take dry-run passes.
+    JobStreet jobs are held back while JobStreet is off."""
     states = [Q.APPROVED, Q.FAILED] + ([] if dry_run else [Q.DRY_RUN_OK])
     applied = db.applied_on_site_uuids()
     rows = [r for r in db.applications(states)
             if (r["state"] != Q.FAILED or r["attempts"] < Q.MAX_ATTEMPTS)
-            and r["job_uuid"] not in applied]
+            and r["job_uuid"] not in applied
+            and (jobstreet or source_of(r["job_uuid"]) != "jobstreet")]
     return rows[:limit] if limit else rows
 
 
@@ -60,7 +62,7 @@ def run(
         result.stopped = reason
         return result
     budget = limit if dry_run else min(limit or 10**6, pacer.remaining())
-    jobs = pending(db, dry_run, budget)
+    jobs = pending(db, dry_run, budget, jobstreet=cfg.jobstreet.enabled)
     if not jobs:
         return result
 
