@@ -31,3 +31,10 @@ def test_set_section_value_keeps_comments():
     new, changed = S.set_section_value(text, "telegram", "enabled", "true")
     assert changed and new.startswith("telegram:\n  enabled: true   # turn on\n")
     assert new.endswith("serve:\n  enabled: false\n")
+
+
+def test_windows_start_command_quotes_the_window_title():
+    # Unquoted, `start` treats "mcf-apply" as the program to run ("Windows cannot find").
+    cmd = S.start_command(Path(r"C:\Users\me\applicationapp\scripts\start-serve-windows.cmd"))
+    assert cmd == ('start "mcf-apply" /min '
+                   r'"C:\Users\me\applicationapp\scripts\start-serve-windows.cmd"')

@@ -77,13 +77,19 @@ def install_windows_autostart(project: Path) -> Path:
     target = windows_startup_dir() / STARTUP_NAME
     target.write_text(
         "@echo off\r\nrem Starts mcf-apply when you log in. Delete this file to stop that.\r\n"
-        f'start "mcf-apply" /min "{script}"\r\n', encoding="utf-8")
+        f"{start_command(script)}\r\n", encoding="utf-8")
     return target
+
+
+def start_command(script: Path) -> str:
+    # `start` takes its first *quoted* argument as the window title. Passed unquoted,
+    # Windows tried to run a program called "mcf-apply" and couldn't find it.
+    return f'start "mcf-apply" /min "{script}"'
 
 
 def start_windows_serve(project: Path) -> None:
     script = project / "scripts" / "start-serve-windows.cmd"
-    subprocess.Popen(["cmd", "/c", "start", "mcf-apply", "/min", str(script)], cwd=project)
+    subprocess.Popen(start_command(script), shell=True, cwd=project)
 
 
 def keep_awake_when_plugged_in() -> bool:
