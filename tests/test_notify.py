@@ -301,3 +301,23 @@ def test_dry_run_mode_explains_why_nothing_was_submitted(setup, tg, tmp_path):
     assert "Nothing was submitted (dry run)" in tg.sent()[-1]["text"]
     cfg.apply.mode = "manual"
     assert "Dry run mode" not in notifier.status_text()
+
+
+def test_login_qr_replaces_the_previous_one_and_is_cleared_at_the_end(setup, tg):
+    from mcf_autoapply.mcf.browser import LoginQR
+    _, db, notifier, _, _ = setup
+    assert notifier.send_login_qr(LoginQR(b"png1", "https://app.singpass.gov.sg/qrlogin?s=1"), 0)
+    first_id = int(db.get_state(notifier.QR_MSG_KEY))
+    assert "Valid until about" in tg.sent("sendPhoto")[0]["multipart"]
+    assert tg.sent("deleteMessage") == []
+
+    assert notifier.send_login_qr(LoginQR(b"png2", "https://app.singpass.gov.sg/qrlogin?s=2"), 1)
+    assert [d["message_id"] for d in tg.sent("deleteMessage")] == [first_id]   # stale QR gone
+    second_id = int(db.get_state(notifier.QR_MSG_KEY))
+    assert second_id != first_id
+
+    notifier.clear_login_qr()
+    assert [d["message_id"] for d in tg.sent("deleteMessage")] == [first_id, second_id]
+    assert db.get_state(notifier.QR_MSG_KEY) is None
+    notifier.clear_login_qr()                       # nothing left: no extra calls
+    assert len(tg.sent("deleteMessage")) == 2

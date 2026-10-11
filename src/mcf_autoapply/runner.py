@@ -122,7 +122,11 @@ def login(cfg: Config, log: Log, notifier: Notifier | None = None,
 
     log("Opening the Singpass login. Waiting up to 10 minutes for you to approve it…")
     with open_page(cfg.apply, headless=False if headless is None else headless) as page:
-        ok = login_via_qr(page, on_qr, on_unclear=on_unclear)
+        try:
+            ok = login_via_qr(page, on_qr, on_unclear=on_unclear)
+        finally:
+            if notifier:
+                notifier.clear_login_qr()   # whatever happened, that QR is no longer usable
         if ok:
             save_session(page.context, cfg.apply)   # don't wait for close: keep it now
     if not ok:
@@ -261,7 +265,8 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
 
     def login_task() -> None:
         with worker_notifier() as (wdb, wn):
-            wn._send("Opening the Singpass login. The QR code will arrive here in a few seconds.")
+            wn._send("Opening the Singpass login. The QR code will arrive here in a few "
+                     "seconds. Tap it within a minute.")
             try:
                 ok = (do_login or (lambda: login(cfg, log, wn)))()
             except Exception as e:   # e.g. no display available
@@ -287,6 +292,7 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
 
     commands = {"/run": run_cmd, "/login": login_cmd}
     notifier.register_commands(serve=True)
+    notifier.clear_login_qr()   # a QR from before a restart can't be approved any more
     notifier._send("🟢 <b>mcf-apply is running.</b> Searching for jobs now; "
                    f"then every {cfg.serve.interval_minutes} min. /help for commands.")
     next_run = clock()   # run straight away on start

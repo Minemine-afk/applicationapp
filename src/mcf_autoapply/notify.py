@@ -9,6 +9,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from mcf_autoapply.config import Config, get_env
 from mcf_autoapply.db import STATUS_NEW, Database
@@ -159,23 +160,49 @@ class Notifier:
         self.db.commit()
         return sent
 
+    QR_MSG_KEY = "tg:login_qr_msg"
+    QR_LIFETIME_S = 60
+
     def send_login_qr(self, qr, n: int = 0) -> bool:
-        """Send a Singpass login QR, with a button that opens the Singpass app on this phone."""
+        """Send a Singpass login QR, with a button that opens the Singpass app on this phone.
+
+        Only the newest QR works (each lasts about a minute), so the previous QR message is
+        deleted first: a stale link just opens the Singpass app with nothing to approve.
+        """
         if not self.enabled:
             return False
+        self.clear_login_qr()
+        tz = ZoneInfo(self.cfg.apply.timezone)
+        until = (datetime.now(tz) + timedelta(seconds=self.QR_LIFETIME_S)).strftime("%H:%M:%S")
         head = ("🔐 <b>Singpass login for MyCareersFuture</b>" if n == 0
                 else "🔄 <b>New Singpass QR</b> (the previous one expired)")
-        caption = (f"{head}\nOn this phone: tap <b>Open in Singpass app</b> and approve.\n"
+        caption = (f"{head}\n"
+                   f"⏱ Valid until about <b>{until}</b>. Tap <b>Open in Singpass app</b> now and "
+                   "approve. If the app opens with nothing to approve, this code has expired: "
+                   "wait for the next one, which arrives by itself.\n"
                    "Or scan the QR with the Singpass app from another screen.\n"
-                   "Each code lasts about a minute; a fresh one follows until you're in.\n"
                    "Only approve a login you started. Don't forward this.")
         links = [("Open in Singpass app", qr.link)] if qr.link and qr.link.startswith("https://") else None
         try:
-            self.api.send_photo(self.chat_id, qr.png, caption, links)
-            return True
+            msg = self.api.send_photo(self.chat_id, qr.png, caption, links)
         except TelegramError as e:
             self.errors.append(str(e))
             return False
+        self.db.set_state(self.QR_MSG_KEY, str(msg.get("message_id", "")))
+        self.db.commit()
+        return True
+
+    def clear_login_qr(self) -> None:
+        """Delete the last QR message, if any: it's expired or the login is over."""
+        msg_id = self.db.get_state(self.QR_MSG_KEY)
+        if not msg_id or not self.enabled:
+            return
+        try:
+            self.api.call("deleteMessage", chat_id=self.chat_id, message_id=int(msg_id))
+        except (TelegramError, ValueError):
+            pass   # already gone, or too old to delete
+        self.db.set_state(self.QR_MSG_KEY, None)
+        self.db.commit()
 
     def run_summary(self, new_passed: int = 0, auto_approved: int = 0, result=None) -> bool:
         """One message per run, only when something happened."""
