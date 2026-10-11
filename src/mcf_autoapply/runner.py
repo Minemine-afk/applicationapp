@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import traceback
 from collections.abc import Callable
+from contextlib import contextmanager
 
 from mcf_autoapply.config import Config
 from mcf_autoapply.db import Database
@@ -130,45 +132,144 @@ def single_instance(port: int = SERVE_LOCK_PORT):
     return sock
 
 
+class TaskRunner:
+    """Runs "run" and "login" one at a time on a background thread.
+
+    Telegram is handled on the main thread, so the bot keeps answering while a long search,
+    application round or login is in progress. Each task is queued at most once.
+    """
+
+    def __init__(self, handlers: dict[str, Callable[[], None]], log: Log,
+                 background: bool = True) -> None:
+        self.handlers = handlers
+        self.log = log
+        self.current: str | None = None
+        self._queue: list[str] = []
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._background = background
+        if background:
+            threading.Thread(target=self._loop, daemon=True, name="mcf-tasks").start()
+
+    @property
+    def busy(self) -> bool:
+        return self.current is not None or bool(self._queue)
+
+    @property
+    def active(self) -> str | None:
+        """The running task, or the one about to start."""
+        with self._lock:
+            return self.current or (self._queue[0] if self._queue else None)
+
+    def submit(self, name: str) -> str:
+        """Queue a task. Returns "started", "queued" (after another task) or "already"."""
+        with self._lock:
+            if name == self.current or name in self._queue:
+                return "already"
+            state = "queued" if self.busy else "started"
+            self._queue.append(name)
+        if self._background:
+            self._wake.set()
+        else:
+            self._drain()   # tests: run right away, on this thread
+        return state
+
+    def _loop(self) -> None:
+        while True:
+            self._wake.wait()
+            self._wake.clear()
+            self._drain()
+
+    def _drain(self) -> None:
+        while True:
+            with self._lock:
+                if not self._queue or (not self._background and self.current):
+                    return
+                self.current = self._queue.pop(0)
+            try:
+                self.handlers[self.current]()
+            except Exception as e:   # a failed task must never stop the service
+                self.log(f"[red]{self.current} failed: {e}[/red]\n{traceback.format_exc()}")
+            finally:
+                with self._lock:
+                    self.current = None
+
+
+ACTIVITY = {"run": "searching and applying", "login": "waiting for your Singpass login"}
+
+
 def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
           clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
           run: Callable[[], None] | None = None, do_login: Callable[[], bool] | None = None,
-          max_loops: int | None = None) -> None:
-    """Run every interval, and handle Telegram taps and /login, /run in between."""
+          max_loops: int | None = None, background: bool = True) -> None:
+    """A run every interval plus /run and /login, all in the background, so Telegram taps and
+    commands are answered immediately, even mid-run.
+    """
     interval = cfg.serve.interval_minutes * 60
-    run = run or (lambda: run_once(cfg, db, notifier, log, handle_taps=False))
-    do_login = do_login or (lambda: login(cfg, log, notifier))
-    next_run = clock()   # run straight away on start
 
-    def run_now() -> str:
-        nonlocal next_run
-        next_run = clock()
-        return "Starting a run now."
-
-    def login_cmd() -> str:
-        notifier._send("Opening the Singpass login on the home machine. "
-                       "The QR code will arrive here in a few seconds.")
+    @contextmanager
+    def worker_notifier():
+        # The background thread needs its own database connection (SQLite connections
+        # can't be shared across threads) and its own Telegram client.
+        if not background:
+            yield db, notifier
+            return
+        wdb = Database(cfg.db_path)
+        wn = Notifier.from_config(cfg, wdb)
         try:
-            ok = do_login()
-        except Exception as e:   # e.g. no display available
-            return f"Login failed: {e}"
-        if ok:
-            run_now()
-            return "✅ Logged in. Starting a run."
-        return "Didn't detect a login within 10 minutes. Send /login to try again."
+            yield wdb, wn
+        finally:
+            for err in wn.errors:
+                log(f"[yellow]Telegram: {err}[/yellow]")
+            wn.close()
+            wdb.close()
 
-    commands = {"/run": lambda args: run_now(), "/login": lambda args: login_cmd()}
+    def run_task() -> None:
+        with worker_notifier() as (wdb, wn):
+            try:
+                (run or (lambda: run_once(cfg, wdb, wn, log, handle_taps=False)))()
+            except Exception as e:   # a bad run must never stop the service
+                log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
+                wn.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
+
+    def login_task() -> None:
+        with worker_notifier() as (wdb, wn):
+            wn._send("Opening the Singpass login. The QR code will arrive here in a few seconds.")
+            try:
+                ok = (do_login or (lambda: login(cfg, log, wn)))()
+            except Exception as e:   # e.g. no display available
+                wn._send(f"Login failed: {e}")
+                return
+            wn._send("✅ Logged in. Starting a run." if ok else
+                     "Didn't detect a login within 10 minutes. Send /login to try again.")
+        if ok:
+            tasks.submit("run")
+
+    tasks = TaskRunner({"run": run_task, "login": login_task}, log, background)
+
+    def run_cmd(args: str) -> str:
+        return {"started": "Starting a run now. Results arrive here when it's done.",
+                "queued": "A run will start as soon as the current task finishes.",
+                "already": "A run is already in progress or queued."}[tasks.submit("run")]
+
+    def login_cmd(args: str) -> str | None:
+        return {"started": None,   # the login task sends its own messages
+                "queued": "The login will start as soon as the current run finishes "
+                          "(usually a few minutes).",
+                "already": "A login is already in progress or queued."}[tasks.submit("login")]
+
+    commands = {"/run": run_cmd, "/login": login_cmd}
     notifier.register_commands(serve=True)
+    notifier._send("🟢 <b>mcf-apply is running.</b> Searching for jobs now; "
+                   f"then every {cfg.serve.interval_minutes} min. /help for commands.")
+    next_run = clock()   # run straight away on start
     loops = 0
     while max_loops is None or loops < max_loops:
         loops += 1
         if clock() >= next_run:
             next_run = clock() + interval
-            try:
-                run()
-            except Exception as e:   # a bad run must never stop the service
-                log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
-                notifier.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
+            tasks.submit("run")
+        notifier.activity = ACTIVITY.get(tasks.active) if tasks.active else None
         wait = max(1, min(50, next_run - clock()))
         if notifier.api is not None:   # linked, or waiting for /start to link
             for done in notifier.handle_updates(timeout=int(wait), commands=commands):

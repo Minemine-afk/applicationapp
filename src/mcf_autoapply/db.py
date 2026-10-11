@@ -88,7 +88,9 @@ class Database:
         path = Path(path)
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        # serve uses one connection for Telegram and one for the background run; wait for
+        # each other's short writes instead of failing with "database is locked".
+        self.conn = sqlite3.connect(path, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self._migrate()

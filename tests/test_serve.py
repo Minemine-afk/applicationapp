@@ -45,7 +45,7 @@ def test_runs_on_start_then_every_interval_and_survives_errors(cfg, db):
             raise RuntimeError("MCF API down")
 
     serve(cfg, db, Notifier(cfg, db, None, None), logs.append, clock=clock, sleep=clock.sleep,
-          run=run, max_loops=400)
+          run=run, max_loops=400, background=False)
     assert runs[0] == 0
     assert [b - a for a, b in zip(runs, runs[1:])] == [3600] * (len(runs) - 1)
     assert len(runs) >= 4                          # kept going after the failed run
@@ -75,13 +75,14 @@ def test_login_and_run_commands(cfg, db, tg):
         return True
 
     serve(cfg, db, notifier, lambda m: None, clock=clock, sleep=clock.sleep,
-          run=lambda: runs.append(clock()), do_login=do_login, max_loops=3)
+          run=lambda: runs.append(clock()), do_login=do_login, max_loops=3,
+          background=False)
     texts = [b["text"] for b in tg.sent()]
     assert any("QR code will arrive here" in t for t in texts)
     assert "✅ Logged in. Starting a run." in texts
-    assert "Starting a run now." in texts
+    assert any(t.startswith("Starting a run now") for t in texts)
     assert any(t.startswith("<b>Commands</b>") and "/login" in t for t in texts)   # /nope
-    assert logins == [0] and len(runs) == 2       # start-up run + run triggered by commands
+    assert logins == [0] and len(runs) == 3       # start-up, after login, and /run
 
 
 def test_login_failure_is_reported_not_raised(cfg, db, tg):
@@ -93,7 +94,7 @@ def test_login_failure_is_reported_not_raised(cfg, db, tg):
         raise RuntimeError("Missing X server or $DISPLAY")
 
     serve(cfg, db, notifier, lambda m: None, clock=clock, sleep=clock.sleep,
-          run=lambda: None, do_login=no_display, max_loops=1)
+          run=lambda: None, do_login=no_display, max_loops=1, background=False)
     assert tg.sent()[-1]["text"] == "Login failed: Missing X server or $DISPLAY"
 
 
@@ -113,3 +114,37 @@ def test_only_one_serve_at_a_time():
     finally:
         lock.close()
     single_instance(port=47392).close()   # free again once the first one stops
+
+
+def test_telegram_answers_while_a_long_run_is_in_progress(cfg, db, tg):
+    """The bug this guards against: the bot went silent for minutes during a run."""
+    import threading
+    import time as real_time
+
+    from mcf_autoapply.runner import TaskRunner
+
+    release, started = threading.Event(), threading.Event()
+
+    def slow_run():
+        started.set()
+        release.wait(10)
+
+    notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    tg.pending_updates += [message(1, "/status"), message(2, "/run"), message(3, "/login")]
+    t0 = real_time.monotonic()
+    serve(cfg, db, notifier, lambda m: None, run=slow_run, do_login=lambda: True,
+          max_loops=1, background=True)   # the start-up run goes to the background thread
+    texts = [b["text"] for b in tg.sent()]
+    assert started.wait(5)                         # the run really ran, in the background
+    assert real_time.monotonic() - t0 < 5          # answered without waiting for the run
+    assert any("⏳ Busy: searching and applying" in t for t in texts)
+    assert "A run is already in progress or queued." in texts
+    assert any("login will start as soon as the current run finishes" in t for t in texts)
+    release.set()
+
+    # One task at a time, in order, each queued once.
+    order = []
+    tasks = TaskRunner({"a": lambda: order.append("a"), "b": lambda: order.append("b")},
+                       lambda m: None, background=False)
+    assert tasks.submit("a") == "started" and tasks.submit("b") == "started"
+    assert order == ["a", "b"] and not tasks.busy

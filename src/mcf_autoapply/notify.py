@@ -61,6 +61,7 @@ class Notifier:
             lambda: MCFClient(cfg.discovery.requests_per_second))
         self.errors: list[str] = []
         self._handlers: dict = {}
+        self.activity: str | None = None   # set by serve while a background task runs
 
     @classmethod
     def from_config(cls, cfg: Config, db: Database, **kwargs) -> Notifier:
@@ -433,6 +434,8 @@ class Notifier:
         lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]
         if reason := pacer.blocked_reason():
             lines.append(f"⏸ {escape(reason)}")
+        if self.activity:
+            lines.append(f"⏳ Busy: {self.activity}")
         return "\n".join(lines)
 
 
