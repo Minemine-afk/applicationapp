@@ -13,8 +13,8 @@ searches:
 
 filters:
   max_age_days: 14                    # ignore postings older than this
-  salary_min_monthly: 5000            # drop jobs whose top of range is below this (SGD)
-  max_years_experience_required: 8    # drop jobs asking for more than this
+  salary_min_monthly: 3500            # drop jobs whose top of range is below this (SGD)
+  max_years_experience_required: 2    # drop jobs asking for more than this
   employment_types: [Full Time, Permanent, Contract]   # empty list = any
   position_levels: []                 # e.g. [Executive, Senior Executive, Professional]
   # The title must contain at least one of these (whole words, case-insensitive).
@@ -72,6 +72,17 @@ filters:
     - desktop support
     - infrastructure support
     - technician
+    # seniority beyond 1-2 years of experience
+    - senior
+    - sr
+    - lead
+    - principal
+    - staff
+    - head
+    - manager
+    - director
+    - architect
+    - vp
   company_blocklist: []               # names (substring, case-insensitive) or UENs
   exclude_agencies: false             # true = skip recruitment agencies
   skip_duplicate_postings: true       # same company + same title already in the feed
