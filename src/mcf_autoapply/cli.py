@@ -356,6 +356,12 @@ def run_cmd(
     db.close()
 
 
+def _telegram_off_reason(cfg: Config) -> str:
+    if not cfg.telegram.enabled:
+        return "config.yml has `enabled: false` under `telegram:`"
+    return f"no bot token found ({cfg.telegram.token_env} isn't set)"
+
+
 @app.command("serve")
 def serve_cmd(config: ConfigOpt = None) -> None:
     """Keep running: a run every serve.interval_minutes, plus Telegram taps, /login and /run."""
@@ -367,8 +373,8 @@ def serve_cmd(config: ConfigOpt = None) -> None:
     cfg, db = _load(config)
     notifier = Notifier.from_config(cfg, db)
     if notifier.api is None:
-        console.print("[yellow]Telegram is off (no bot token, or telegram.enabled is false). "
-                      "Run `mcf-apply setup`. Continuing without it.[/yellow]")
+        console.print(f"[yellow]Telegram is off: {_telegram_off_reason(cfg)}. "
+                      "Run `mcf-apply setup` to fix it. Continuing without Telegram.[/yellow]")
     elif not notifier.enabled:
         console.print("[cyan]Send /start to your bot in Telegram to link it.[/cyan]")
     console.print(f"Serving: a run every {cfg.serve.interval_minutes} min. Ctrl+C to stop.")
