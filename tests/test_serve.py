@@ -77,7 +77,7 @@ def test_login_and_run_commands(cfg, db, tg):
     serve(cfg, db, notifier, lambda m: None, clock=clock, sleep=clock.sleep,
           run=lambda: runs.append(clock()), do_login=do_login, max_loops=3)
     texts = [b["text"] for b in tg.sent()]
-    assert any("http://pi.local:6080/vnc.html" in t for t in texts)   # where to scan the QR
+    assert any("QR code will arrive here" in t for t in texts)
     assert "✅ Logged in. Starting a run." in texts
     assert "Starting a run now." in texts
     assert any(t.startswith("Commands:") and "/login" in t for t in texts)

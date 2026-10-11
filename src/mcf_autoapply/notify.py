@@ -133,6 +133,24 @@ class Notifier:
         self.db.commit()
         return sent
 
+    def send_login_qr(self, qr, n: int = 0) -> bool:
+        """Send a Singpass login QR, with a button that opens the Singpass app on this phone."""
+        if not self.enabled:
+            return False
+        head = ("🔐 <b>Singpass login for MyCareersFuture</b>" if n == 0
+                else "🔄 <b>New Singpass QR</b> (the previous one expired)")
+        caption = (f"{head}\nOn this phone: tap <b>Open in Singpass app</b> and approve.\n"
+                   "Or scan the QR with the Singpass app from another screen.\n"
+                   "Each code lasts about a minute; a fresh one follows until you're in.\n"
+                   "Only approve a login you started. Don't forward this.")
+        links = [("Open in Singpass app", qr.link)] if qr.link and qr.link.startswith("https://") else None
+        try:
+            self.api.send_photo(self.chat_id, qr.png, caption, links)
+            return True
+        except TelegramError as e:
+            self.errors.append(str(e))
+            return False
+
     def run_summary(self, new_passed: int = 0, auto_approved: int = 0, result=None) -> bool:
         """One message per run, only when something happened."""
         outcomes = result.outcomes if result else []

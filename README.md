@@ -79,7 +79,7 @@ the employer's yes/no screening questions, if there are any. The tool does exact
 real browser, logged in as you.
 
 ```bash
-mcf-apply login                 # opens a browser; log in with Singpass yourself (once per session)
+mcf-apply login                 # Singpass QR on screen and in Telegram; approve in the Singpass app
 mcf-apply approve 8c7d83be 9dfbf2a6   # queue jobs (IDs from `mcf-apply list`)
 mcf-apply questions             # screening questions that need your answer
 mcf-apply answer 1 yes          # saved to answers.yml and reused for every job that asks it
@@ -152,8 +152,10 @@ Run it on a machine at home that stays on. `mcf-apply serve` does everything in 
 a full run every hour (`serve.interval_minutes`), plus Telegram taps and commands as they
 arrive. It replaces cron and `mcf-apply bot`.
 
-Logging in is the one manual step. When MCF's login expires you get a Telegram alert, send
-**/login**, and scan the Singpass QR code on the machine's screen with the Singpass app.
+Logging in is the one manual step. When MCF's login expires you get a Telegram alert. Send
+**/login** and the Singpass QR arrives in Telegram with an **Open in Singpass app** button.
+Tap it on your phone and approve. QRs expire after about a minute, and fresh ones are sent
+automatically.
 
 ### Option A: a computer with a screen (old laptop or desktop)
 
@@ -185,8 +187,8 @@ The Docker image includes a virtual screen that you view in a web browser, for t
    (find the IP with `hostname -I`).
 4. Start it: `docker compose up -d --build`. It restarts on reboot.
 5. Link Telegram (send your bot a message first): `docker compose exec mcf-apply mcf-apply telegram-setup`.
-6. Send **/login** to your bot, open the view URL on your laptop, enter `VNC_PASSWORD`, and
-   scan the QR code with the Singpass app.
+6. Send **/login** to your bot and tap **Open in Singpass app** on the QR it sends. The browser
+   view on port 6080 is a fallback, for watching the browser or scanning the QR there.
 
 Other commands run the same way, for example `docker compose exec mcf-apply mcf-apply queue`.
 Logs: `docker compose logs -f`. Data (job database, browser login, screenshots) is in `./data`.

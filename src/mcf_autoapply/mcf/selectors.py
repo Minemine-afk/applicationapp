@@ -6,6 +6,12 @@ When MCF changes its UI, this is the file to update.
 
 HOME_URL = "https://www.mycareersfuture.gov.sg/"
 
+# Login: "Log In" opens a side panel whose Singpass button goes to login.id.singpass.gov.sg,
+# which shows a QR code (an SVG) encoding an https://app.singpass.gov.sg/qrlogin?... link.
+SINGPASS_BUTTON = '[data-testid="login-with-singpass"]'
+SINGPASS_QR = "#ndi-qr-canvas"
+SINGPASS_REFRESH_TEXT = "Refresh QR Code"         # shown when a QR expires (~1 min)
+
 # Job details page
 APPLY_BUTTON = "#job-details-apply-button"        # "Apply", "Applied" or "Apply via Careers@Gov"
 LOGIN_TO_APPLY = "#login_button"                  # shown instead when logged out

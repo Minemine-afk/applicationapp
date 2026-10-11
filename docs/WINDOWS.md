@@ -52,8 +52,15 @@ from this folder as `.venv\Scripts\mcf-apply ...`.
 .venv\Scripts\mcf-apply login
 ```
 
-A browser window opens. Click **Log In** and scan the Singpass QR code with the Singpass app.
-The window closes by itself once you're logged in, and the login is saved for later runs.
+A browser window opens and goes straight to the Singpass login. At the same time, the Singpass
+QR code is sent to your Telegram with an **Open in Singpass app** button:
+
+- **On your phone:** tap **Open in Singpass app** and approve the login.
+- **Or:** scan the QR on the PC screen with the Singpass app.
+
+Each QR lasts about a minute. When one expires, a fresh one is sent automatically, for up to
+10 minutes. Once you approve, the window closes, you get "✅ Logged in" in Telegram, and the
+login is saved for later runs.
 
 ## 5. First run: try it without submitting
 
@@ -87,8 +94,8 @@ While it runs, it searches and applies every hour between 8am and 10pm, and resp
 - **Apply / Skip** buttons on job cards, and **Yes / No** on screening questions
 - **/status** shows the queue and today's count
 - **/run** runs now
-- **/login** opens the MCF login on this PC when the login has expired. Scan the QR code on
-  the PC's screen.
+- **/login** starts a new login when the old one expires. The Singpass QR and the
+  **Open in Singpass app** button arrive in Telegram, so you can log in from anywhere.
 
 ### Stop the PC from sleeping
 
@@ -112,8 +119,8 @@ On a laptop, also open Control Panel → Power Options → **Choose what closing
 ## Day to day
 
 - Most things happen in Telegram.
-- When you get **"MCF login expired"**, send **/login** while you're at the PC and scan the QR code.
-  Scanning needs the QR on a different screen from your phone.
+- When you get **"MCF login expired"**, send **/login** and tap **Open in Singpass app** on the
+  QR that arrives.
 - To see everything: `.venv\Scripts\mcf-apply queue`.
 - To update to the latest version: stop mcf-apply (close its window), then in PowerShell:
   ```powershell

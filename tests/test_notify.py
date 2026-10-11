@@ -30,11 +30,14 @@ class FakeTelegram:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         method = request.url.path.rsplit("/", 1)[-1]
-        body = json.loads(request.content or b"{}")
+        if request.headers.get("content-type", "").startswith("multipart/"):
+            body = {"multipart": request.content.decode("utf-8", "replace")}
+        else:
+            body = json.loads(request.content or b"{}")
         self.calls.append((method, body))
         if self.fail:
             return httpx.Response(403, json={"ok": False, "description": self.fail})
-        if method == "sendMessage":
+        if method in ("sendMessage", "sendPhoto"):
             self.next_id += 1
             return httpx.Response(200, json={"ok": True, "result": {"message_id": self.next_id}})
         if method == "getUpdates":
@@ -202,3 +205,18 @@ def test_telegram_errors_never_break_a_run(setup, tg):
     assert notifier.handle_updates() == []
     assert any("bot was blocked" in e for e in notifier.errors)
     assert all(TOKEN not in e for e in notifier.errors)
+
+
+def test_login_qr_is_sent_as_photo_with_open_in_app_button(setup, tg):
+    from mcf_autoapply.mcf.browser import LoginQR
+    _, _, notifier, _, _ = setup
+    link = "https://app.singpass.gov.sg/qrlogin?session=abc"
+    assert notifier.send_login_qr(LoginQR(b"\x89PNG fake", link), 0)
+    [photo] = tg.sent("sendPhoto")
+    body = photo["multipart"]
+    assert "Singpass login for MyCareersFuture" in body and "Open in Singpass app" in body
+    assert link in body and "image/png" in body
+
+    assert notifier.send_login_qr(LoginQR(b"png", None), 1)   # undecodable QR: photo only
+    assert "Open in Singpass app" not in tg.sent("sendPhoto")[-1]["multipart"].split("caption")[0]
+    assert "inline_keyboard" not in tg.sent("sendPhoto")[-1]["multipart"]

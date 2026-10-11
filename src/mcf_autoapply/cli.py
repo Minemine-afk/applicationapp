@@ -297,16 +297,25 @@ def answer_cmd(
 
 
 @app.command("login")
-def login_cmd(config: ConfigOpt = None) -> None:
-    """Open a browser window so you can log in to MCF with Singpass."""
-    cfg, _ = _load(config)
-    from mcf_autoapply.mcf.browser import open_page, wait_for_login
-
-    console.print("Log in with Singpass in the browser window. Waiting up to 10 minutes…")
-    with open_page(cfg.apply, headless=False) as page:
-        ok = wait_for_login(page)
-    console.print("[green]Logged in. The session is saved for future runs.[/green]" if ok
-                  else "[red]Didn't detect a login. Run `mcf-apply login` again.[/red]")
+def login_cmd(
+    config: ConfigOpt = None,
+    headless: Annotated[bool, typer.Option("--headless/--show-browser",
+                                           help="Hide the browser (QR only via Telegram)")] = False,
+) -> None:
+    """Log in to MCF with Singpass. The QR code is sent to Telegram if it's linked."""
+    cfg, db = _load(config)
+    notifier = Notifier.from_config(cfg, db)
+    if headless and not notifier.enabled:
+        console.print("[red]--headless needs Telegram linked, or you'd have no QR to scan.[/red]")
+        raise typer.Exit(1)
+    ok = R.login(cfg, _log, notifier, headless=headless)
+    if ok:
+        notifier._send("✅ Logged in to MyCareersFuture.")
+        console.print("[green]Logged in. The session is saved for future runs.[/green]")
+    else:
+        console.print("[red]Didn't detect a login within 10 minutes. Run `mcf-apply login` again.[/red]")
+    notifier.close()
+    db.close()
     if not ok:
         raise typer.Exit(1)
 

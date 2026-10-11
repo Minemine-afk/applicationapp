@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -23,14 +24,26 @@ class TelegramAPI:
 
     def call(self, method: str, **params: Any) -> Any:
         params = {k: v for k, v in params.items() if v is not None}
+        return self._post(method, json=params)
+
+    def _post(self, method: str, **kwargs: Any) -> Any:
         try:
-            resp = self._http.post(f"{self._base}/{method}", json=params)
+            resp = self._http.post(f"{self._base}/{method}", **kwargs)
         except httpx.HTTPError as e:
             raise TelegramError(f"{method}: {type(e).__name__}") from None   # keep token out of logs
         data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
         if not data.get("ok"):
             raise TelegramError(f"{method}: {data.get('description') or resp.status_code}")
         return data["result"]
+
+    def send_photo(self, chat_id: int, png: bytes, caption: str,
+                   links: list[tuple[str, str]] | None = None) -> dict:
+        """A PNG with an HTML caption and optional link buttons [(label, https-url)]."""
+        data = {"chat_id": str(chat_id), "caption": caption, "parse_mode": "HTML"}
+        if links:
+            data["reply_markup"] = json.dumps(
+                {"inline_keyboard": [[{"text": label, "url": url}] for label, url in links]})
+        return self._post("sendPhoto", data=data, files={"photo": ("qr.png", png, "image/png")})
 
     def send(self, chat_id: int, text: str, buttons: list[list[tuple[str, str]]] | None = None,
              ) -> dict:

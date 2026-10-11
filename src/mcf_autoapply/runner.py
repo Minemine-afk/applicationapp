@@ -88,12 +88,24 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
                          sum(d.state == Q.APPROVED for d in decisions))
 
 
-def login(cfg: Config, log: Log) -> bool:
-    from mcf_autoapply.mcf.browser import open_page, wait_for_login
+def login(cfg: Config, log: Log, notifier: Notifier | None = None,
+          headless: bool | None = None) -> bool:
+    """Open the Singpass QR login. Each QR goes to Telegram (if linked) and stays on screen."""
+    from mcf_autoapply.mcf.browser import login_via_qr, open_page
 
-    log("Waiting up to 10 minutes for a Singpass login in the browser…")
-    with open_page(cfg.apply, headless=False) as page:
-        return wait_for_login(page)
+    def on_qr(qr, n):
+        if notifier and notifier.send_login_qr(qr, n):
+            log("Singpass QR sent to Telegram" + (" (refreshed)." if n else "."))
+        elif n == 0:
+            log("Scan the Singpass QR in the browser window with the Singpass app.")
+        if notifier:
+            for err in notifier.errors:
+                log(f"[yellow]Telegram: {err}[/yellow]")
+            notifier.errors.clear()
+
+    log("Opening the Singpass login. Waiting up to 10 minutes for you to approve it…")
+    with open_page(cfg.apply, headless=False if headless is None else headless) as page:
+        return login_via_qr(page, on_qr)
 
 
 def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
@@ -103,7 +115,7 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
     """Run every interval, and handle Telegram taps and /login, /run in between."""
     interval = cfg.serve.interval_minutes * 60
     run = run or (lambda: run_once(cfg, db, notifier, log, handle_taps=False))
-    do_login = do_login or (lambda: login(cfg, log))
+    do_login = do_login or (lambda: login(cfg, log, notifier))
     next_run = clock()   # run straight away on start
 
     def run_now() -> str:
@@ -112,10 +124,8 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         return "Starting a run now."
 
     def login_cmd() -> str:
-        url = cfg.serve.login_view_url
-        notifier._send("Opening the MCF login page on the home machine. "
-                       + (f"Open {url} and scan the Singpass QR code." if url
-                          else "Scan the Singpass QR code on its screen."))
+        notifier._send("Opening the Singpass login on the home machine. "
+                       "The QR code will arrive here in a few seconds.")
         try:
             ok = do_login()
         except Exception as e:   # e.g. no display available
