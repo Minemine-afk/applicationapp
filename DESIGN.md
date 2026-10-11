@@ -65,6 +65,11 @@ each application or setting rules for which ones go through without asking.
 - Stop paging when a whole page holds jobs already in the DB, or when the posting date is older
   than `max_age_days`.
 - Upsert by `uuid`. Store the raw JSON so later re-scoring doesn't need re-fetching.
+- **Title synonyms**: each search can list `also:` titles ("BI analyst", "reporting analyst",
+  "analytics executive"). Each one is queried, and results are de-duplicated by `uuid`.
+- Runs **hourly during active hours** (default 08:00–22:00 SGT), so new postings are scored
+  and queued within about an hour of going live. Applying early gets you noticed more than
+  applying a day later.
 
 ### 3.2 Filter (`pipeline/filter.py`): deterministic, cheap, runs first
 Rules from `config.yml`:
@@ -86,16 +91,23 @@ Two layers:
     "seniority_match": "under|match|over", "recommendation": "apply|maybe|skip",
     "reasoning": "two sentences"}
    ```
-Final score = weighted blend. Cache by `(job_uuid, resume_hash, prompt_version)` so a job is
+Final score = weighted blend. When you have several resume versions (§3.4), the job is scored
+against each one and the best-scoring version is used for the application. Cache by `(job_uuid, resume_hash, prompt_version)` so a job is
 only re-scored when your resume or the prompt changes.
 
 ### 3.4 Tailor (`pipeline/tailor.py`)
+- **Resume versions**: `profile.resumes` holds two or three versions, each tagged with the job
+  types it targets (e.g. analytics, BI, data engineering). The best-scoring version is uploaded,
+  so more jobs clear the threshold without stretching the truth.
 - **Cover letter**: generated from a template and your resume, 150–250 words, grounded only in facts
   from your resume. The prompt forbids inventing experience.
 - **Screening questions**: answered from an **answer bank** (`answers.yml`) first, matched by
   normalised question text plus embedding similarity. Yes/no and numeric questions (notice period,
   expected salary, work-pass status) must come from the bank and never from the LLM. Any question
   without a confident match sends the job to `needs_input`.
+- **Growing the answer bank**: when you answer a `needs_input` question, the answer is saved to
+  the bank and every job waiting on that question is released. Unanswered questions are the
+  main thing holding jobs back in auto mode, and the backlog shrinks fast after the first week.
 
 ### 3.5 Review queue (`web/` or `cli review`)
 Every scored job lands in one of three states:
@@ -103,11 +115,18 @@ Every scored job lands in one of three states:
 | Mode | Behaviour |
 |---|---|
 | `manual` (default) | You approve or edit each application in the dashboard. |
-| `auto_threshold` | Auto-approve when `score ≥ auto_apply_min_score` AND every screening question is answered from the bank AND the job is on the MCF portal. Everything else waits for you. |
+| `auto_threshold` | Auto-approve when `score ≥ auto_apply_min_score` AND every screening question is answered from the bank AND the job is on the MCF portal. Jobs in the quick-review band (below) go to your phone. Everything else waits in the dashboard. |
 | `dry_run` | Run the whole pipeline but never click submit. Use this first. |
 
 The dashboard shows the job, the score breakdown, gaps, the draft cover letter and the answers,
 with **Approve / Edit / Skip** buttons.
+
+**Quick approval on your phone (Telegram)**: jobs scoring in the quick-review band
+(`quick_review_min_score` to `auto_apply_min_score`, default 60–75) are sent to a Telegram bot
+as a short card: title, company, salary, score, top two gaps. The card has **Apply / Skip**
+buttons. Tapping Apply queues the job with its draft cover letter and saved answers, so you can
+clear the borderline jobs in seconds wherever you are. `needs_input` questions are also sent as
+Telegram messages, and your reply is saved to the answer bank.
 
 ### 3.6 Apply (`mcf/applier.py`)
 - Playwright with a **persistent browser context** (`~/.mcf-autoapply/browser-profile`), so
@@ -124,7 +143,15 @@ with **Approve / Edit / Skip** buttons.
 - Keep all selectors in one file (`mcf/selectors.py`). MCF will change its UI, and this keeps the
   fix in one place.
 
-### 3.7 Track
+### 3.7 Pacing (`pipeline/pacer.py`)
+Submissions are spread across the day instead of sent in one burst:
+- A queue of approved jobs drains in **active hours only**, with at most `hourly_cap` per hour
+  and `daily_cap` per day, and a random 45–120 s wait between submissions.
+- Highest score and newest posting go first, so if the daily cap is hit, the weakest matches wait.
+- **Gradual increase**: with `ramp` set, the daily cap goes up step by step over a few weeks
+  (e.g. 15 → 25 → 40), and only steps up after a clean week (see §7).
+
+### 3.8 Track
 State machine per job:
 
 ```
@@ -168,13 +195,22 @@ events(id PK, job_uuid, ts, type, payload JSON)   -- audit log of every action
 `config.yml`
 ```yaml
 profile:
-  resume_pdf: ./me/resume.pdf
-  resume_text: ./me/resume.md        # what the LLM reads
+  resumes:                            # the best-scoring version is used per job
+    - name: analytics
+      pdf: ./me/resume-analytics.pdf
+      text: ./me/resume-analytics.md  # what the LLM reads
+      targets: [data analyst, reporting]
+    - name: bi
+      pdf: ./me/resume-bi.pdf
+      text: ./me/resume-bi.md
+      targets: [business intelligence, dashboards]
   skills: [Python, SQL, Tableau, Power BI, ETL]
   years_experience: 4
 searches:
   - query: "data analyst"
+    also: ["reporting analyst", "analytics executive", "insights analyst"]
   - query: "business intelligence"
+    also: ["BI analyst", "BI developer"]
     employment_types: [Full Time, Permanent]
 filters:
   salary_min_monthly: 5000
@@ -186,11 +222,17 @@ filters:
 apply:
   mode: dry_run                       # dry_run | manual | auto_threshold
   auto_apply_min_score: 75
-  daily_cap: 15
+  quick_review_min_score: 60          # 60–75 go to Telegram for a one-tap decision
+  daily_cap: 40                       # final cap once the ramp completes
+  hourly_cap: 4
+  active_hours: ["08:00", "22:00"]    # Asia/Singapore
+  ramp: [15, 25, 40]                  # step up one level after each clean week
   delay_seconds: [45, 120]            # random wait between submissions
 llm:
   model: claude-sonnet-5-5
-schedule: "0 9,18 * * *"              # twice a day
+schedule: "5 8-21 * * *"              # discover + score hourly during active hours
+notify:
+  telegram: true                      # quick approvals, needs_input questions, alerts
 ```
 
 `answers.yml`
@@ -219,14 +261,21 @@ Secrets (`ANTHROPIC_API_KEY`, optional Telegram bot token) go in `.env` and are 
 | CLI | Typer | `mcf-apply discover / score / review / apply / run` |
 | Dashboard | FastAPI + HTMX + Jinja | A small review UI without a JavaScript build step |
 | Scheduling | cron / systemd timer (or APScheduler in `serve`) | Simple |
-| Notifications | Telegram bot or email | "8 jobs waiting for review", "Session expired" |
+| Notifications | Telegram bot (`python-telegram-bot`) | One-tap Apply/Skip on borderline jobs, answering new screening questions, "Session expired" and pause alerts |
 
 ---
 
 ## 7. Safety, politeness and reliability
 
 - **Rate limits**: at most 1 API request per second for discovery; random 45–120 s between
-  submissions; `daily_cap` (default 15) on applications.
+  submissions; `hourly_cap` and `daily_cap` on applications (§3.7).
+- **Automatic pause**: submissions stop and you get a Telegram alert if the tool sees a
+  CAPTCHA, a warning or rate-limit message from MCF, or more than 2 failed submissions in an
+  hour. When the tool pauses, the ramp drops back one step. I don't know whether MCF limits
+  applications, so the tool watches for these signs instead of assuming a safe number.
+- **Quality check**: phase 6 tracks the response rate for each score range. If low-scoring
+  applications get no replies, raise `auto_apply_min_score` or lower the cap rather than
+  sending more.
 - **Kill switch**: `apply.mode: dry_run`, or the presence of a `STOP` file, halts all submissions.
 - **Idempotency**: a unique constraint on applications, plus a pre-submit check of MCF's
   "Applied" badge on the job page.
@@ -260,8 +309,9 @@ applicationapp/
 │   │   ├── filter.py
 │   │   ├── score.py
 │   │   ├── tailor.py
-│   │   └── answers.py      # answer-bank matching
-│   ├── notify.py
+│   │   ├── answers.py      # answer-bank matching
+│   │   └── pacer.py        # hourly/daily caps, ramp, auto-pause
+│   ├── notify.py           # Telegram bot: quick approvals, alerts
 │   └── web/                # FastAPI + HTMX review dashboard
 └── tests/
     ├── fixtures/           # saved MCF JSON + HTML snapshots
@@ -278,7 +328,7 @@ applicationapp/
 | **2. Score + tailor** | LLM fit scores, gap analysis, draft cover letters | Shows where to spend effort |
 | **3. Review dashboard** | Approve / edit / skip UI, answer-bank editor | One place to manage everything |
 | **4. Apply (dry run)** | Playwright fills forms up to the submit button and saves screenshots | Lets you check the automation safely |
-| **5. Apply (live)** | Real submission, daily cap, notifications, scheduler | Fully automated with you in control |
+| **5. Apply (live)** | Real submission, hourly pacing and ramp, automatic pause, Telegram quick approvals, hourly scheduler | Fully automated with you in control |
 | **6. Outcomes** | Sync "My Applications" status; response-rate stats per score bucket | Shows how to tune the threshold |
 
 Testing: unit-test the filter, scoring and answer matching against saved fixtures. Test the
@@ -293,4 +343,4 @@ applier against saved HTML snapshots and through a dry-run smoke test before any
 2. Which LLM budget is acceptable? At about 40 jobs a day, Sonnet scoring and drafting costs
    around a few dollars a month.
 3. Should the default mode for live runs be `manual` or `auto_threshold`?
-4. Do you want one resume, or several resume variants picked per job category?
+4. Which job types should each resume version target? Send me the resumes and I'll suggest the split.
