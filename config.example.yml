@@ -188,8 +188,8 @@ apply:
 
 telegram:
   # Job cards with Apply / Skip, screening questions with Yes / No, run summaries and alerts.
-  # Setup: README → Telegram. The bot token goes in the TELEGRAM_BOT_TOKEN environment
-  # variable, never in this file.
+  # `mcf-apply setup` saves the bot token in the TELEGRAM_BOT_TOKEN environment variable
+  # (never in this file) and links your chat when you press Start on the bot.
   enabled: true
   quick_review_min_score: 60          # jobs from here up to auto_apply_min_score come to your phone
   max_cards_per_run: 8

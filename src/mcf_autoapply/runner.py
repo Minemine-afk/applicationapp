@@ -10,6 +10,7 @@ from mcf_autoapply.config import Config
 from mcf_autoapply.db import Database
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.notify import Notifier
+from mcf_autoapply.overrides import apply_overrides
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import discover
@@ -71,6 +72,7 @@ def finish_notifications(notifier: Notifier, result, log: Log, new_passed: int =
 
 def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
              headless: bool | None = True, handle_taps: bool = True) -> None:
+    apply_overrides(cfg, db)   # e.g. /mode set from Telegram
     if handle_taps:
         for done in notifier.handle_updates():   # taps since the last run
             log(f"Telegram: {done}")
@@ -108,6 +110,26 @@ def login(cfg: Config, log: Log, notifier: Notifier | None = None,
         return login_via_qr(page, on_qr)
 
 
+SERVE_LOCK_PORT = 47391
+
+
+class AlreadyRunning(RuntimeError):
+    pass
+
+
+def single_instance(port: int = SERVE_LOCK_PORT):
+    """Hold a local port as a lock so only one `serve` runs (two would double-apply)."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        sock.close()
+        raise AlreadyRunning("mcf-apply serve is already running on this computer") from None
+    return sock
+
+
 def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
           clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
           run: Callable[[], None] | None = None, do_login: Callable[[], bool] | None = None,
@@ -135,7 +157,8 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
             return "✅ Logged in. Starting a run."
         return "Didn't detect a login within 10 minutes. Send /login to try again."
 
-    commands = {"/run": run_now, "/login": login_cmd}
+    commands = {"/run": lambda args: run_now(), "/login": lambda args: login_cmd()}
+    notifier.register_commands(serve=True)
     loops = 0
     while max_loops is None or loops < max_loops:
         loops += 1
@@ -147,7 +170,7 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
                 log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
                 notifier.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
         wait = max(1, min(50, next_run - clock()))
-        if notifier.enabled:
+        if notifier.api is not None:   # linked, or waiting for /start to link
             for done in notifier.handle_updates(timeout=int(wait), commands=commands):
                 log(f"Telegram: {done}")
             if notifier.errors:   # Telegram unreachable: don't spin

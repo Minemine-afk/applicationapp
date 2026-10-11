@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Annotated, Optional
@@ -16,6 +17,7 @@ from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Data
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.models import Job
 from mcf_autoapply.notify import CHAT_ID_KEY, Notifier
+from mcf_autoapply.overrides import apply_overrides
 from mcf_autoapply import runner as R
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
@@ -38,7 +40,8 @@ def _load(config: Path | None) -> tuple[Config, Database]:
     except FileNotFoundError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from e
-    return cfg, Database(cfg.db_path)
+    db = Database(cfg.db_path)
+    return apply_overrides(cfg, db), db
 
 
 def _salary(row) -> str:
@@ -356,11 +359,18 @@ def run_cmd(
 @app.command("serve")
 def serve_cmd(config: ConfigOpt = None) -> None:
     """Keep running: a run every serve.interval_minutes, plus Telegram taps, /login and /run."""
+    try:
+        lock = R.single_instance()
+    except R.AlreadyRunning as e:
+        console.print(f"[yellow]{e}.[/yellow]")
+        raise typer.Exit(3) from None   # start-serve-windows.cmd stops retrying on 3
     cfg, db = _load(config)
     notifier = Notifier.from_config(cfg, db)
-    if cfg.telegram.enabled and not notifier.enabled:
-        console.print("[yellow]Telegram is enabled but not linked: set the bot token and run "
-                      "`mcf-apply telegram-setup`. Continuing without it.[/yellow]")
+    if notifier.api is None:
+        console.print("[yellow]Telegram is off (no bot token, or telegram.enabled is false). "
+                      "Run `mcf-apply setup`. Continuing without it.[/yellow]")
+    elif not notifier.enabled:
+        console.print("[cyan]Send /start to your bot in Telegram to link it.[/cyan]")
     console.print(f"Serving: a run every {cfg.serve.interval_minutes} min. Ctrl+C to stop.")
     try:
         R.serve(cfg, db, notifier, _log)
@@ -369,6 +379,92 @@ def serve_cmd(config: ConfigOpt = None) -> None:
     finally:
         notifier.close()
         db.close()
+        lock.close()
+
+
+@app.command("setup")
+def setup_cmd(
+    autostart: Annotated[bool, typer.Option("--autostart/--no-autostart",
+                                            help="Windows: start mcf-apply when you log in")] = True,
+) -> None:
+    """One-time setup: config files, Telegram, browser, and (Windows) start on login."""
+    from mcf_autoapply import setup as S
+
+    project = Path.cwd()
+    if not (project / "config.example.yml").exists():
+        console.print("[red]Run this from the applicationapp folder.[/red]")
+        raise typer.Exit(1)
+    for name in S.ensure_files(project):
+        console.print(f"[green]✓[/green] Created {name}")
+
+    # 1. Telegram bot token
+    cfg = load_config(project / "config.yml")
+    env_name = cfg.telegram.token_env
+    token, entered = get_env(env_name), False
+    for _ in range(3):
+        if not token:
+            console.print("Create a bot: in Telegram, message [bold]@BotFather[/bold] and send /newbot.")
+            token = typer.prompt("Paste the bot token here").strip()
+            entered = True
+        try:
+            api = TelegramAPI(token)
+            bot = api.call("getMe")
+            api.close()
+            break
+        except TelegramError:
+            console.print("[red]That token didn't work. Check it and paste it again.[/red]")
+            token = None
+    else:
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/green] Telegram bot: @{bot['username']}")
+    if entered:
+        if S.save_user_env(env_name, token):
+            console.print(f"[green]✓[/green] Saved the token for your Windows user ({env_name})")
+        elif sys.platform != "win32":
+            console.print(f"[yellow]Add this to your shell profile so it survives restarts:[/yellow]\n"
+                          f"  export {env_name}={token}")
+    if S.enable_telegram(project / "config.yml"):
+        console.print("[green]✓[/green] Turned on Telegram in config.yml")
+
+    # 2. Browser
+    if S.install_browser(lambda m: console.print(m)):
+        console.print("[green]✓[/green] Browser installed")
+    else:
+        console.print("[red]Browser install failed; run `.venv/Scripts/playwright install chromium`.[/red]")
+
+    # 3. Link your chat
+    cfg, db = _load(project / "config.yml")
+    notifier = Notifier.from_config(cfg, db)
+    if not notifier.enabled:
+        console.print(f"\nIn Telegram, open [bold]https://t.me/{bot['username']}[/bold] and press "
+                      "[bold]Start[/bold] (or send /start). Waiting up to 5 minutes…")
+        if not S.wait_for_start(notifier, lambda m: console.print(f"[yellow]{m}[/yellow]")):
+            console.print("[red]No /start received. Run `mcf-apply setup` again.[/red]")
+            raise typer.Exit(1)
+    console.print("[green]✓[/green] Linked to your Telegram chat")
+    notifier.register_commands(serve=True)
+
+    # 4. Keep it running
+    if sys.platform == "win32":
+        if autostart:
+            path = S.install_windows_autostart(project)
+            console.print(f"[green]✓[/green] Starts automatically when you log in ({path.name} in Startup)")
+        if typer.confirm("Keep this PC from sleeping while it's plugged in? "
+                         "(Hourly runs need it awake.)", default=True):
+            if S.keep_awake_when_plugged_in():
+                console.print("[green]✓[/green] Sleep turned off while plugged in")
+        S.start_windows_serve(project)
+        console.print("[green]✓[/green] mcf-apply is running in a minimised window. "
+                      "Closing that window stops it.")
+    else:
+        console.print("Start it with [cyan]mcf-apply serve[/cyan] and keep it running.")
+    notifier._send("🚀 <b>mcf-apply is set up.</b>\n1. Send /login to log in to MyCareersFuture.\n"
+                   "2. Send /mode to choose how it applies (starts in dry run).\n"
+                   "3. Send /jobs to see the best matches.\n/help lists everything.")
+    console.print("\n[bold green]Done.[/bold green] Everything else happens in Telegram: "
+                  "send /login to your bot.")
+    notifier.close()
+    db.close()
 
 
 @app.command("telegram-setup")

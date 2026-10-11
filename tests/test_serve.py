@@ -80,7 +80,7 @@ def test_login_and_run_commands(cfg, db, tg):
     assert any("QR code will arrive here" in t for t in texts)
     assert "✅ Logged in. Starting a run." in texts
     assert "Starting a run now." in texts
-    assert any(t.startswith("Commands:") and "/login" in t for t in texts)
+    assert any(t.startswith("<b>Commands</b>") and "/login" in t for t in texts)   # /nope
     assert logins == [0] and len(runs) == 2       # start-up run + run triggered by commands
 
 
@@ -97,8 +97,19 @@ def test_login_failure_is_reported_not_raised(cfg, db, tg):
     assert tg.sent()[-1]["text"] == "Login failed: Missing X server or $DISPLAY"
 
 
-def test_logged_out_alert_points_to_login_view(cfg, db, tg):
+def test_logged_out_alert_says_how_to_log_in(cfg, db, tg):
     notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
     notifier.report_stop("MCF session expired; run `mcf-apply login`")
     text = tg.sent()[-1]["text"]
-    assert "Send /login" in text and "http://pi.local:6080/vnc.html" in text
+    assert "Send /login" in text and "Singpass app" in text
+
+
+def test_only_one_serve_at_a_time():
+    from mcf_autoapply.runner import AlreadyRunning, single_instance
+    lock = single_instance(port=47392)
+    try:
+        with pytest.raises(AlreadyRunning):
+            single_instance(port=47392)
+    finally:
+        lock.close()
+    single_instance(port=47392).close()   # free again once the first one stops

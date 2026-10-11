@@ -76,7 +76,7 @@ class Apply(_Strict):
 
 
 class Telegram(_Strict):
-    enabled: bool = False
+    enabled: bool = True   # still needs the bot token (`mcf-apply setup`)
     # The bot token is a secret: it is read from this environment variable, never from config.
     token_env: str = "TELEGRAM_BOT_TOKEN"
     # Set by `mcf-apply telegram-setup`; only this chat can press buttons.

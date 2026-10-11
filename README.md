@@ -101,31 +101,27 @@ Check the screenshots in `data/screenshots/`. When they look right, set `apply.m
 
 ### Telegram
 
-Get job cards, screening questions and alerts on your phone, and answer them with one tap.
+Once set up, you can run everything from Telegram: logging in, choosing the mode, picking jobs,
+answering questions and checking results.
 
-1. In Telegram, message **@BotFather**, send `/newbot` and follow the steps. It gives you a
-   bot token.
-2. Put the token in your environment, not in `config.yml`:
-   `export TELEGRAM_BOT_TOKEN=123456:ABC...`. For cron, add it to the crontab line.
-3. Send your new bot any message, then run `mcf-apply telegram-setup`. This links your chat,
-   and only that chat's buttons are accepted.
-4. Set `telegram.enabled: true` in `config.yml`.
+**Setup:** run `mcf-apply setup`. It asks for a bot token (create a bot by messaging **@BotFather**
+with `/newbot`), saves it in your user environment (never in `config.yml`), turns Telegram on,
+installs the browser, and links your chat when you press **Start** on the bot. On Windows it
+also makes mcf-apply start when you log in. Then keep `mcf-apply serve` running (see Home server).
 
-What you get:
+| Command | What it does |
+|---|---|
+| `/login` | Singpass QR with an **Open in Singpass app** button; fresh QRs every minute until approved |
+| `/mode` | 🧪 dry run / ✋ manual / 🤖 auto (stored in the database; overrides `config.yml`) |
+| `/jobs [n]` | Best jobs not applied to yet, with **Apply / Skip** |
+| `/questions` | Unanswered screening questions with **Yes / No**; answers saved to `answers.yml` |
+| `/run` | Search and apply now |
+| `/queue`, `/status` | Queue, today's count, pause state |
+| `/pause`, `/resume` | Stop or restart submissions |
 
-- **Job cards** with **Apply / Skip** for borderline jobs: scores from `quick_review_min_score`
-  up to `auto_apply_min_score` in auto mode, or every job above the floor in manual mode.
-- **Screening questions** with **Yes / No**. Your answer is saved to `answers.yml` and every job
-  waiting on that question is queued.
-- **Run summaries:** what was applied, what failed and why, and today's count. Runs where
-  nothing happened send nothing.
-- **Alerts** when your MCF login expires or submissions pause, at most every 6 hours.
-- **`/status`**: send it to the bot at any time.
-
-Taps are handled instantly while `mcf-apply serve` runs (see Home server). With cron instead,
-they're picked up at the start of each `mcf-apply run`. `mcf-apply notify` sends pending cards
-right away. In serve mode you can also send **/login** (opens the MCF login on the home machine)
-and **/run** (run now).
+Sent without asking: job cards after each search, new screening questions, run summaries
+(with screenshots of dry-run review pages and failures), and alerts when the login expires or
+submissions pause. Only the linked chat is obeyed. `/login` and `/run` need `mcf-apply serve`.
 
 ### Safety rules
 
@@ -186,7 +182,7 @@ The Docker image includes a virtual screen that you view in a web browser, for t
 3. In `config.yml`, set `serve.login_view_url: http://<machine-ip>:6080/vnc.html`
    (find the IP with `hostname -I`).
 4. Start it: `docker compose up -d --build`. It restarts on reboot.
-5. Link Telegram (send your bot a message first): `docker compose exec mcf-apply mcf-apply telegram-setup`.
+5. Link Telegram: send **/start** to your bot. The first chat to do that is linked.
 6. Send **/login** to your bot and tap **Open in Singpass app** on the QR it sends. The browser
    view on port 6080 is a fallback, for watching the browser or scanning the QR there.
 

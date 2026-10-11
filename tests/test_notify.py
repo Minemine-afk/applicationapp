@@ -220,3 +220,70 @@ def test_login_qr_is_sent_as_photo_with_open_in_app_button(setup, tg):
     assert notifier.send_login_qr(LoginQR(b"png", None), 1)   # undecodable QR: photo only
     assert "Open in Singpass app" not in tg.sent("sendPhoto")[-1]["multipart"].split("caption")[0]
     assert "inline_keyboard" not in tg.sent("sendPhoto")[-1]["multipart"]
+
+
+# --- control from Telegram ---------------------------------------------------------------
+
+def msg(update_id, text, chat=CHAT):
+    return {"update_id": update_id, "message": {"chat": {"id": chat}, "text": text}}
+
+
+def test_first_start_links_the_chat_and_other_chats_are_ignored(setup, tg):
+    cfg, db, notifier, _, _ = setup
+    notifier.chat_id = None                       # fresh install: nothing linked yet
+    tg.pending_updates += [msg(1, "hello", chat=555), msg(2, "/start", chat=555),
+                           msg(3, "/status", chat=999)]
+    assert notifier.handle_updates() == ["linked chat 555"]
+    assert notifier.chat_id == 555 and db.get_state("tg:chat_id") == "555"
+    assert "Linked" in tg.sent()[0]["text"] and "/jobs" in tg.sent()[0]["text"]
+    assert len(tg.sent()) == 1                    # chat 999 got nothing
+
+
+def test_mode_command_and_buttons_persist(setup, tg):
+    from mcf_autoapply.overrides import apply_overrides
+    cfg, db, notifier, _, _ = setup
+    tg.pending_updates += [msg(1, "/mode")]
+    notifier.handle_updates()
+    buttons = tg.sent()[-1]["reply_markup"]["inline_keyboard"][0]
+    assert [b["callback_data"] for b in buttons] == ["m:dry_run", "m:manual", "m:auto"]
+
+    tg.tap(2, "m:manual")
+    assert notifier.handle_updates() == ["mode set to manual"]
+    assert "Manual" in tg.sent("editMessageText")[-1]["text"]
+    cfg.apply.mode = "auto"
+    assert apply_overrides(cfg, db).apply.mode == "manual"   # survives restarts
+
+    tg.pending_updates += [msg(3, "/mode dry run")]
+    notifier.handle_updates()
+    assert cfg.apply.mode == "dry_run" and "Mode set to" in tg.sent()[-1]["text"]
+
+
+def test_pause_resume_queue_jobs_and_unknown_text(setup, tg):
+    cfg, db, notifier, jobs, _ = setup
+    tg.pending_updates += [msg(1, "/pause"), msg(2, "/jobs 2"), msg(3, "/queue"),
+                           msg(4, "/resume"), msg(5, "what?")]
+    notifier.handle_updates()
+    texts = [b["text"] for b in tg.sent()]
+    assert texts[0].startswith("⏸")
+    cards = [t for t in texts if "Score" in t]
+    assert len(cards) == 2                         # /jobs 2: the best two, any score band
+    assert "Queue is empty" in texts[3]
+    assert texts[4].startswith("▶️")
+    assert texts[5].startswith("<b>Commands</b>")  # unknown text → help
+
+
+def test_run_summary_sends_dry_run_and_failure_screenshots(setup, tg, tmp_path):
+    from mcf_autoapply.mcf.applier import Outcome
+    from mcf_autoapply.pipeline.apply import RunResult
+    _, _, notifier, _, _ = setup
+    shot = tmp_path / "review.png"
+    shot.write_bytes(b"\x89PNG")
+    result = RunResult(dry_run=True, outcomes=[
+        ("Associate AI Engineer", Outcome(Q.DRY_RUN_OK, "stopped", str(shot))),
+        ("Data Analyst", Outcome(Q.FAILED, "stuck on Add experience", str(shot))),
+        ("Gone", Outcome(Q.FAILED, "x", str(tmp_path / "missing.png"))),
+    ])
+    notifier.run_summary(0, 0, result)
+    photos = [p["multipart"] for p in tg.sent("sendPhoto")]
+    assert len(photos) == 2
+    assert "Review page (not submitted)" in photos[0] and "stuck on Add experience" in photos[1]
