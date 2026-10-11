@@ -159,14 +159,22 @@ class Notifier:
         if not reason:
             return
         if "session expired" in reason:
-            self.alert("logged_out", "MCF login expired. Run `mcf-apply login` on your computer.")
+            url = self.cfg.serve.login_view_url
+            how = (f"Send /login here, then open {url} and scan the Singpass QR code." if url
+                   else "Run `mcf-apply login` on the machine running mcf-apply.")
+            self.alert("logged_out", f"MCF login expired. {how}")
         elif reason.startswith("paused"):
             self.alert("paused", f"Submissions {reason}")
 
     # --- incoming ------------------------------------------------------------------------
 
-    def handle_updates(self, timeout: int = 0) -> list[str]:
-        """Process button taps and commands. Returns what was done, for logging."""
+    def handle_updates(
+        self, timeout: int = 0, commands: dict[str, Callable[[], str]] | None = None,
+    ) -> list[str]:
+        """Process button taps and /commands. Returns what was done, for logging.
+
+        `commands` adds handlers (e.g. /login, /run in serve mode); each returns a reply.
+        """
         if not self.enabled:
             return []
         offset = self.db.get_state(OFFSET_KEY)
@@ -181,10 +189,16 @@ class Notifier:
             try:
                 if cb := update.get("callback_query"):
                     done.append(self._on_callback(cb))
-                elif (msg := update.get("message")) and msg.get("text", "").startswith("/status"):
-                    if msg["chat"]["id"] == self.chat_id:
-                        self._send(self.status_text())
-                        done.append("sent status")
+                elif (msg := update.get("message")) and msg["chat"]["id"] == self.chat_id:
+                    command = msg.get("text", "").split()[0].split("@")[0] if msg.get("text") else ""
+                    handlers = {"/status": self.status_text, **(commands or {})}
+                    if command in handlers:
+                        # Save the offset first: a long command (/login) must not run twice.
+                        self.db.commit()
+                        self._send(handlers[command]())
+                        done.append(f"handled {command}")
+                    elif command.startswith("/"):
+                        self._send("Commands: " + ", ".join(sorted(handlers)))
             except TelegramError as e:
                 self.errors.append(str(e))
             self.db.commit()

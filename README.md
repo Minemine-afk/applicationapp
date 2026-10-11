@@ -122,8 +122,10 @@ What you get:
 - **Alerts** when your MCF login expires or submissions pause, at most every 6 hours.
 - **`/status`**: send it to the bot at any time.
 
-`mcf-apply run` picks up your taps at the start of each run. For instant handling, keep
-`mcf-apply bot` running. `mcf-apply notify` sends any pending cards right away.
+Taps are handled instantly while `mcf-apply serve` runs (see Home server). With cron instead,
+they're picked up at the start of each `mcf-apply run`. `mcf-apply notify` sends pending cards
+right away. In serve mode you can also send **/login** (opens the MCF login on the home machine)
+and **/run** (run now).
 
 ### Safety rules
 
@@ -143,6 +145,54 @@ What you get:
 
 MCF's own guidance is to "avoid mass applications and focus on roles where you can genuinely
 add value", so keep the threshold meaningful.
+
+## Home server
+
+Run it on a machine at home that stays on. `mcf-apply serve` does everything in one process:
+a full run every hour (`serve.interval_minutes`), plus Telegram taps and commands as they
+arrive. It replaces cron and `mcf-apply bot`.
+
+Logging in is the one manual step. When MCF's login expires you get a Telegram alert, send
+**/login**, and scan the Singpass QR code on the machine's screen with the Singpass app.
+
+### Option A: a computer with a screen (old laptop or desktop)
+
+Install as in Setup, then leave this running:
+
+```bash
+export TELEGRAM_BOT_TOKEN=...      # Windows PowerShell: $env:TELEGRAM_BOT_TOKEN="..."
+.venv/bin/mcf-apply serve
+```
+
+Turn off sleep in the power settings. To start it automatically, use Task Scheduler "At log
+on" on Windows, a Login Item on Mac, or a systemd user service on Linux.
+
+### Option B: no screen (Raspberry Pi 4/5, mini PC) with Docker
+
+The Docker image includes a virtual screen that you view in a web browser, for the QR code.
+
+1. Install Docker (Raspberry Pi OS: `curl -fsSL https://get.docker.com | sh`).
+2. Get the code and create your files next to `docker-compose.yml`:
+   ```bash
+   git clone https://github.com/Minemine-afk/applicationapp && cd applicationapp
+   cp config.example.yml config.yml
+   cp answers.example.yml answers.yml
+   cp .env.example .env               # set TELEGRAM_BOT_TOKEN and VNC_PASSWORD
+   ```
+3. In `config.yml`, set `serve.login_view_url: http://<machine-ip>:6080/vnc.html`
+   (find the IP with `hostname -I`).
+4. Start it: `docker compose up -d --build`. It restarts on reboot.
+5. Link Telegram (send your bot a message first): `docker compose exec mcf-apply mcf-apply telegram-setup`.
+6. Send **/login** to your bot, open the view URL on your laptop, enter `VNC_PASSWORD`, and
+   scan the QR code with the Singpass app.
+
+Other commands run the same way, for example `docker compose exec mcf-apply mcf-apply queue`.
+Logs: `docker compose logs -f`. Data (job database, browser login, screenshots) is in `./data`.
+
+**Keep port 6080 inside your home network.** Don't port-forward it on your router: anyone who
+reaches it and guesses the password sees your logged-in browser. To log in while you're away,
+install [Tailscale](https://tailscale.com) on the machine and your laptop, and use the Tailscale
+IP in `login_view_url`.
 
 ## Tests
 

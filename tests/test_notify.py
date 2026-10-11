@@ -188,7 +188,7 @@ def test_run_summary_only_when_something_happened(setup, tg):
 def test_status_command_and_disabled_notifier(setup, tg):
     cfg, db, notifier, _, _ = setup
     tg.pending_updates.append({"update_id": 7, "message": {"chat": {"id": CHAT}, "text": "/status"}})
-    assert notifier.handle_updates() == ["sent status"]
+    assert notifier.handle_updates() == ["handled /status"]
     assert "Mode" in tg.sent()[-1]["text"]
 
     off = Notifier(cfg, db, None, None)

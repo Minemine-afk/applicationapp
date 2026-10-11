@@ -195,6 +195,14 @@ telegram:
   max_cards_per_run: 8
   alert_every_hours: 6                # same alert (e.g. login expired) at most this often
 
+serve:
+  # `mcf-apply serve` keeps running on a home machine: a full run every interval,
+  # and Telegram taps, /login, /run and /status handled as they arrive.
+  interval_minutes: 60
+  # Where you open the machine's browser to scan the Singpass QR code. With the Docker
+  # setup: http://<machine-ip>:6080/vnc.html. Sent to you in "login expired" alerts.
+  login_view_url: ""
+
 discovery:
   page_size: 100
   max_pages: 5                        # per search term, per run

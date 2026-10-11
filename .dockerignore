@@ -1,0 +1,10 @@
+.venv
+.git
+data
+me
+config.yml
+answers.yml
+.env
+**/__pycache__
+.pytest_cache
+tests

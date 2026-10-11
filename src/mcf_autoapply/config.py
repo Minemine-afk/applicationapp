@@ -87,6 +87,14 @@ class Telegram(_Strict):
     alert_every_hours: float = Field(6, gt=0)   # don't repeat the same alert more often
 
 
+class Serve(_Strict):
+    """`mcf-apply serve`: the always-on mode for a home machine."""
+    interval_minutes: int = Field(60, ge=15)
+    # Where you can see the machine's browser to scan the Singpass QR code, e.g. the
+    # Docker setup's http://<machine-ip>:6080/vnc.html. Included in login alerts.
+    login_view_url: str = ""
+
+
 class Discovery(_Strict):
     page_size: int = Field(100, ge=1, le=100)
     max_pages: int = Field(5, ge=1)
@@ -101,6 +109,7 @@ class Config(_Strict):
     ranking: Ranking = Field(default_factory=Ranking)
     apply: Apply = Field(default_factory=Apply)
     telegram: Telegram = Field(default_factory=Telegram)
+    serve: Serve = Field(default_factory=Serve)
     discovery: Discovery = Field(default_factory=Discovery)
 
 

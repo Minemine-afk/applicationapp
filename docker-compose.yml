@@ -1,0 +1,15 @@
+services:
+  mcf-apply:
+    build: .
+    container_name: mcf-apply
+    restart: unless-stopped
+    env_file: .env                 # TELEGRAM_BOT_TOKEN, VNC_PASSWORD
+    environment:
+      TZ: Asia/Singapore
+    ports:
+      - "6080:6080"                # browser view for Singpass login: http://<this-machine>:6080/vnc.html
+    shm_size: 1gb                  # Chromium needs more shared memory than Docker's default
+    volumes:
+      - ./config.yml:/app/config.yml
+      - ./answers.yml:/app/answers.yml
+      - ./data:/app/data           # job database, browser login, screenshots

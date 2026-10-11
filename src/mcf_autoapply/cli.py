@@ -17,6 +17,7 @@ from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Data
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.models import Job
 from mcf_autoapply.notify import CHAT_ID_KEY, Notifier
+from mcf_autoapply import runner as R
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import apply_filters, discover
@@ -192,11 +193,7 @@ def stats_cmd(config: ConfigOpt = None) -> None:
 
 # --- applying ------------------------------------------------------------------------------
 
-STATE_STYLE = {
-    Q.APPLIED: "green", Q.DRY_RUN_OK: "cyan", Q.APPROVED: "blue", Q.NEEDS_INPUT: "yellow",
-    Q.FAILED: "red", Q.EXTERNAL: "magenta", Q.SKIPPED: "dim", Q.ALREADY_APPLIED: "green",
-    Q.CLOSED: "dim",
-}
+STATE_STYLE = R.STATE_STYLE
 
 
 def _print_decisions(decisions) -> None:
@@ -315,46 +312,8 @@ def login_cmd(config: ConfigOpt = None) -> None:
         raise typer.Exit(1)
 
 
-def _run_applications(cfg: Config, db: Database, dry_run: bool, limit: int | None,
-                      headless: bool | None):
-    from mcf_autoapply.mcf.applier import Applier
-    from mcf_autoapply.mcf.browser import open_page
-    from mcf_autoapply.pipeline import apply as A
-
-    live = not dry_run and cfg.apply.mode != "dry_run"
-    if not dry_run and not live:
-        console.print("[yellow]apply.mode is dry_run, so nothing will be submitted. "
-                      "Set it to manual or auto in config.yml to apply for real.[/yellow]")
-    jobs = A.pending(db, not live, limit)
-    if not jobs:
-        console.print("Nothing queued. Approve jobs with `mcf-apply approve <ID>`"
-                      + (" or let auto mode pick them." if cfg.apply.mode == "auto" else "."))
-        return None
-
-    def show(title, outcome):
-        style = STATE_STYLE.get(outcome.state, "red")
-        console.print(f"[{style}]{outcome.state:<15}[/{style}] {title}  [dim]{outcome.detail}[/dim]")
-
-    console.print(f"{'Submitting' if live else 'Dry run (no submissions)'}: "
-                  f"up to {len(jobs)} job(s)…")
-    with open_page(cfg.apply, headless=headless) as page:
-        result = A.run(
-            cfg, db,
-            lambda: Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live),
-            dry_run=not live, limit=limit, on_outcome=show,
-        )
-    if result.stopped:
-        console.print(f"[yellow]Stopped: {result.stopped}[/yellow]")
-    return result
-
-
-def _finish_notifications(notifier: Notifier, result, new_passed: int = 0,
-                          auto_approved: int = 0) -> None:
-    notifier.run_summary(new_passed, auto_approved, result)
-    notifier.report_stop(result.stopped if result else None)
-    for err in notifier.errors:
-        console.print(f"[yellow]Telegram: {err}[/yellow]")
-    notifier.close()
+def _log(msg: str) -> None:
+    console.print(msg)
 
 
 @app.command("apply")
@@ -367,8 +326,9 @@ def apply_cmd(
     """Apply to queued jobs, within your hourly and daily limits."""
     cfg, db = _load(config)
     notifier = Notifier.from_config(cfg, db)
-    result = _run_applications(cfg, db, dry_run, limit, headless)
-    _finish_notifications(notifier, result)
+    result = R.apply_queue(cfg, db, dry_run, limit, headless, _log)
+    R.finish_notifications(notifier, result, _log)
+    notifier.close()
     db.close()
 
 
@@ -377,24 +337,30 @@ def run_cmd(
     config: ConfigOpt = None,
     headless: Annotated[Optional[bool], typer.Option("--headless/--show-browser")] = True,
 ) -> None:
-    """Discover new jobs, auto-approve (in auto mode) and apply. Meant for cron, hourly."""
+    """Discover new jobs, auto-approve (in auto mode) and apply once. For cron."""
     cfg, db = _load(config)
     notifier = Notifier.from_config(cfg, db)
-    for done in notifier.handle_updates():   # taps since the last run
-        console.print(f"Telegram: {done}")
-    with MCFClient(cfg.discovery.requests_per_second) as client:
-        found = discover(cfg, db, client)
-        console.print(f"Discovered {len(found.new_uuids)} new, "
-                      f"{len(found.new_passed)} passed filters.")
-        bank = AnswerBank(cfg.apply.answers_path)
-        decisions = Q.auto_approve(cfg, db, client, bank)
-    _print_decisions(decisions)
-    notifier.send_question_cards()
-    notifier.send_review_cards()
-    result = _run_applications(cfg, db, dry_run=False, limit=None, headless=headless)
-    _finish_notifications(notifier, result, len(found.new_passed),
-                          sum(d.state == Q.APPROVED for d in decisions))
+    R.run_once(cfg, db, notifier, _log, headless=headless)
+    notifier.close()
     db.close()
+
+
+@app.command("serve")
+def serve_cmd(config: ConfigOpt = None) -> None:
+    """Keep running: a run every serve.interval_minutes, plus Telegram taps, /login and /run."""
+    cfg, db = _load(config)
+    notifier = Notifier.from_config(cfg, db)
+    if cfg.telegram.enabled and not notifier.enabled:
+        console.print("[yellow]Telegram is enabled but not linked: set the bot token and run "
+                      "`mcf-apply telegram-setup`. Continuing without it.[/yellow]")
+    console.print(f"Serving: a run every {cfg.serve.interval_minutes} min. Ctrl+C to stop.")
+    try:
+        R.serve(cfg, db, notifier, _log)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        notifier.close()
+        db.close()
 
 
 @app.command("telegram-setup")
