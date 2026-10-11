@@ -287,3 +287,17 @@ def test_run_summary_sends_dry_run_and_failure_screenshots(setup, tg, tmp_path):
     photos = [p["multipart"] for p in tg.sent("sendPhoto")]
     assert len(photos) == 2
     assert "Review page (not submitted)" in photos[0] and "stuck on Add experience" in photos[1]
+
+
+def test_dry_run_mode_explains_why_nothing_was_submitted(setup, tg, tmp_path):
+    from mcf_autoapply.mcf.applier import Outcome
+    from mcf_autoapply.pipeline.apply import RunResult
+    cfg, db, notifier, jobs, _ = setup
+    cfg.apply.mode = "dry_run"
+    tg.tap(1, f"a:{jobs['mid']}")
+    notifier.handle_updates()
+    assert "Dry run mode never submits" in notifier.status_text()
+    notifier.run_summary(0, 0, RunResult(dry_run=True, outcomes=[("Job", Outcome(Q.DRY_RUN_OK))]))
+    assert "Nothing was submitted (dry run)" in tg.sent()[-1]["text"]
+    cfg.apply.mode = "manual"
+    assert "Dry run mode" not in notifier.status_text()

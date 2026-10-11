@@ -194,6 +194,9 @@ class Notifier:
             lines.append(f"{icon} {escape(title)}{detail}")
         if counts:
             lines.append(", ".join(f"{n} {s}" for s, n in counts.items()))
+        if result and result.dry_run and counts.get(Q.DRY_RUN_OK):
+            lines.append("ℹ️ Nothing was submitted (dry run). Check the screenshots below; "
+                         "if they look right, /mode → ✋ Manual and /run.")
         pacer = Pacer(self.cfg.apply, self.db)
         lines.append(f"Today {pacer.applied_today()}/{pacer.daily_cap()}")
         if self._send("\n".join(lines)) is None:
@@ -436,6 +439,9 @@ class Notifier:
             lines.append(f"⏸ {escape(reason)}")
         if self.activity:
             lines.append(f"⏳ Busy: {self.activity}")
+        if self.cfg.apply.mode == "dry_run" and counts.get(Q.APPROVED, 0) + counts.get(Q.DRY_RUN_OK, 0):
+            lines.append("\nℹ️ Dry run mode never submits. When the screenshots look right, "
+                         "send /mode and pick ✋ Manual to start applying.")
         return "\n".join(lines)
 
 
