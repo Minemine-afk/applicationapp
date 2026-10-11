@@ -186,6 +186,15 @@ apply:
   headless: false                     # `mcf-apply run` is headless regardless
   screenshots_dir: ./data/screenshots
 
+telegram:
+  # Job cards with Apply / Skip, screening questions with Yes / No, run summaries and alerts.
+  # Setup: README → Telegram. The bot token goes in the TELEGRAM_BOT_TOKEN environment
+  # variable, never in this file.
+  enabled: false
+  quick_review_min_score: 60          # jobs from here up to auto_apply_min_score come to your phone
+  max_cards_per_run: 8
+  alert_every_hours: 6                # same alert (e.g. login expired) at most this often
+
 discovery:
   page_size: 100
   max_pages: 5                        # per search term, per run

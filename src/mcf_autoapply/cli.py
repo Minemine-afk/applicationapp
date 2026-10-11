@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -14,10 +16,12 @@ from mcf_autoapply.config import Config, load_config
 from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Database
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.models import Job
+from mcf_autoapply.notify import CHAT_ID_KEY, Notifier
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import apply_filters, discover
 from mcf_autoapply.pipeline.pacer import Pacer
+from mcf_autoapply.telegram import TelegramAPI, TelegramError
 
 app = typer.Typer(help="Find, rank and apply to jobs on MyCareersFuture.", no_args_is_help=True)
 console = Console()
@@ -312,7 +316,7 @@ def login_cmd(config: ConfigOpt = None) -> None:
 
 
 def _run_applications(cfg: Config, db: Database, dry_run: bool, limit: int | None,
-                      headless: bool | None) -> None:
+                      headless: bool | None):
     from mcf_autoapply.mcf.applier import Applier
     from mcf_autoapply.mcf.browser import open_page
     from mcf_autoapply.pipeline import apply as A
@@ -325,7 +329,7 @@ def _run_applications(cfg: Config, db: Database, dry_run: bool, limit: int | Non
     if not jobs:
         console.print("Nothing queued. Approve jobs with `mcf-apply approve <ID>`"
                       + (" or let auto mode pick them." if cfg.apply.mode == "auto" else "."))
-        return
+        return None
 
     def show(title, outcome):
         style = STATE_STYLE.get(outcome.state, "red")
@@ -341,6 +345,16 @@ def _run_applications(cfg: Config, db: Database, dry_run: bool, limit: int | Non
         )
     if result.stopped:
         console.print(f"[yellow]Stopped: {result.stopped}[/yellow]")
+    return result
+
+
+def _finish_notifications(notifier: Notifier, result, new_passed: int = 0,
+                          auto_approved: int = 0) -> None:
+    notifier.run_summary(new_passed, auto_approved, result)
+    notifier.report_stop(result.stopped if result else None)
+    for err in notifier.errors:
+        console.print(f"[yellow]Telegram: {err}[/yellow]")
+    notifier.close()
 
 
 @app.command("apply")
@@ -352,7 +366,9 @@ def apply_cmd(
 ) -> None:
     """Apply to queued jobs, within your hourly and daily limits."""
     cfg, db = _load(config)
-    _run_applications(cfg, db, dry_run, limit, headless)
+    notifier = Notifier.from_config(cfg, db)
+    result = _run_applications(cfg, db, dry_run, limit, headless)
+    _finish_notifications(notifier, result)
     db.close()
 
 
@@ -363,15 +379,99 @@ def run_cmd(
 ) -> None:
     """Discover new jobs, auto-approve (in auto mode) and apply. Meant for cron, hourly."""
     cfg, db = _load(config)
+    notifier = Notifier.from_config(cfg, db)
+    for done in notifier.handle_updates():   # taps since the last run
+        console.print(f"Telegram: {done}")
     with MCFClient(cfg.discovery.requests_per_second) as client:
-        result = discover(cfg, db, client)
-        console.print(f"Discovered {len(result.new_uuids)} new, "
-                      f"{len(result.new_passed)} passed filters.")
+        found = discover(cfg, db, client)
+        console.print(f"Discovered {len(found.new_uuids)} new, "
+                      f"{len(found.new_passed)} passed filters.")
         bank = AnswerBank(cfg.apply.answers_path)
         decisions = Q.auto_approve(cfg, db, client, bank)
     _print_decisions(decisions)
-    _run_applications(cfg, db, dry_run=False, limit=None, headless=headless)
+    notifier.send_question_cards()
+    notifier.send_review_cards()
+    result = _run_applications(cfg, db, dry_run=False, limit=None, headless=headless)
+    _finish_notifications(notifier, result, len(found.new_passed),
+                          sum(d.state == Q.APPROVED for d in decisions))
     db.close()
+
+
+@app.command("telegram-setup")
+def telegram_setup_cmd(config: ConfigOpt = None) -> None:
+    """Link your Telegram chat: send your bot any message first, then run this."""
+    cfg, db = _load(config)
+    token = os.environ.get(cfg.telegram.token_env)
+    if not token:
+        console.print(f"[red]Set {cfg.telegram.token_env} to your bot token first "
+                      "(create a bot with @BotFather).[/red]")
+        raise typer.Exit(1)
+    api = TelegramAPI(token)
+    try:
+        chats = [u["message"]["chat"] for u in api.updates() if "message" in u]
+        if not chats:
+            console.print("[red]No messages found. Send your bot any message in Telegram, "
+                          "then run this again.[/red]")
+            raise typer.Exit(1)
+        chat = chats[-1]
+        db.set_state(CHAT_ID_KEY, str(chat["id"]))
+        db.commit()
+        api.send(chat["id"], "✅ Linked to mcf-apply. You'll get job cards, screening "
+                             "questions and alerts here. Send /status any time.")
+    except TelegramError as e:
+        console.print(f"[red]Telegram: {e}[/red]")
+        raise typer.Exit(1) from e
+    finally:
+        api.close()
+    console.print(f"[green]Linked chat {chat['id']} "
+                  f"({chat.get('username') or chat.get('first_name', '')}).[/green]")
+    if not cfg.telegram.enabled:
+        console.print("Now set [cyan]telegram.enabled: true[/cyan] in config.yml.")
+    db.close()
+
+
+@app.command("notify")
+def notify_cmd(config: ConfigOpt = None) -> None:
+    """Send pending job cards and screening questions to Telegram now."""
+    cfg, db = _load(config)
+    notifier = Notifier.from_config(cfg, db)
+    if not notifier.enabled:
+        console.print("[red]Telegram is off: set telegram.enabled, the bot token env var, "
+                      "and run `mcf-apply telegram-setup`.[/red]")
+        raise typer.Exit(1)
+    for done in notifier.handle_updates():
+        console.print(f"Telegram: {done}")
+    q, j = notifier.send_question_cards(), notifier.send_review_cards()
+    console.print(f"Sent {q} question(s) and {j} job card(s).")
+    for err in notifier.errors:
+        console.print(f"[yellow]Telegram: {err}[/yellow]")
+    notifier.close()
+    db.close()
+
+
+@app.command("bot")
+def bot_cmd(config: ConfigOpt = None) -> None:
+    """Keep running and handle Telegram button taps instantly (Ctrl+C to stop)."""
+    cfg, db = _load(config)
+    notifier = Notifier.from_config(cfg, db)
+    if not notifier.enabled:
+        console.print("[red]Telegram is off. See `mcf-apply telegram-setup`.[/red]")
+        raise typer.Exit(1)
+    console.print("Listening for Telegram taps… (Ctrl+C to stop)")
+    try:
+        while True:
+            for done in notifier.handle_updates(timeout=50):
+                console.print(f"Telegram: {done}")
+            for err in notifier.errors:
+                console.print(f"[yellow]Telegram: {err}[/yellow]")
+            if notifier.errors:
+                notifier.errors.clear()
+                time.sleep(10)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        notifier.close()
+        db.close()
 
 
 @app.command("unpause")

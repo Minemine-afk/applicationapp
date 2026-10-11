@@ -74,6 +74,19 @@ class Apply(_Strict):
     screenshots_dir: Path = Path("./data/screenshots")
 
 
+class Telegram(_Strict):
+    enabled: bool = False
+    # The bot token is a secret: it is read from this environment variable, never from config.
+    token_env: str = "TELEGRAM_BOT_TOKEN"
+    # Set by `mcf-apply telegram-setup`; only this chat can press buttons.
+    chat_id: int | None = None
+    # Jobs scoring from here up to apply.auto_apply_min_score (or any score >= this in
+    # manual mode) are sent to your phone with Apply / Skip buttons.
+    quick_review_min_score: int = Field(60, ge=0, le=100)
+    max_cards_per_run: int = Field(8, ge=0)
+    alert_every_hours: float = Field(6, gt=0)   # don't repeat the same alert more often
+
+
 class Discovery(_Strict):
     page_size: int = Field(100, ge=1, le=100)
     max_pages: int = Field(5, ge=1)
@@ -87,6 +100,7 @@ class Config(_Strict):
     filters: Filters = Field(default_factory=Filters)
     ranking: Ranking = Field(default_factory=Ranking)
     apply: Apply = Field(default_factory=Apply)
+    telegram: Telegram = Field(default_factory=Telegram)
     discovery: Discovery = Field(default_factory=Discovery)
 
 

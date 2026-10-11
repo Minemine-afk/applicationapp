@@ -139,7 +139,7 @@ Every scored job lands in one of three states:
 The dashboard shows the job, the score breakdown, gaps, the draft cover letter and the answers,
 with **Approve / Edit / Skip** buttons.
 
-**Quick approval on your phone (Telegram)**: jobs scoring in the quick-review band
+**Quick approval on your phone (Telegram)** (built, `notify.py`): jobs scoring in the quick-review band
 (`quick_review_min_score` to `auto_apply_min_score`, default 60–75) are sent to a Telegram bot
 as a short card: title, company, salary, score, top two gaps. The card has **Apply / Skip**
 buttons. Tapping Apply queues the job with its draft cover letter and saved answers, so you can
@@ -354,7 +354,7 @@ applicationapp/
 | **2. Score + tailor** | LLM fit scores, gap analysis, draft cover letters | Shows where to spend effort |
 | **3. Review dashboard** | Approve / edit / skip UI, answer-bank editor | One place to manage everything |
 | **4. Apply (dry run)** ✅ | Playwright fills forms up to the submit button and saves screenshots | Lets you check the automation safely |
-| **5. Apply (live)** ✅ (Telegram pending) | Real submission, hourly pacing and ramp, automatic pause, Telegram quick approvals, hourly scheduler | Fully automated with you in control |
+| **5. Apply (live)** ✅ | Real submission, hourly pacing and ramp, automatic pause, Telegram quick approvals, hourly scheduler | Fully automated with you in control |
 | **6. Outcomes** | Sync "My Applications" status; response-rate stats per score bucket | Shows how to tune the threshold |
 
 Testing: unit-test the filter, scoring and answer matching against saved fixtures. Test the

@@ -99,6 +99,32 @@ Check the screenshots in `data/screenshots/`. When they look right, set `apply.m
 5 8-21 * * * cd /path/to/applicationapp && .venv/bin/mcf-apply run >> data/run.log 2>&1
 ```
 
+### Telegram
+
+Get job cards, screening questions and alerts on your phone, and answer them with one tap.
+
+1. In Telegram, message **@BotFather**, send `/newbot` and follow the steps. It gives you a
+   bot token.
+2. Put the token in your environment, not in `config.yml`:
+   `export TELEGRAM_BOT_TOKEN=123456:ABC...`. For cron, add it to the crontab line.
+3. Send your new bot any message, then run `mcf-apply telegram-setup`. This links your chat,
+   and only that chat's buttons are accepted.
+4. Set `telegram.enabled: true` in `config.yml`.
+
+What you get:
+
+- **Job cards** with **Apply / Skip** for borderline jobs: scores from `quick_review_min_score`
+  up to `auto_apply_min_score` in auto mode, or every job above the floor in manual mode.
+- **Screening questions** with **Yes / No**. Your answer is saved to `answers.yml` and every job
+  waiting on that question is queued.
+- **Run summaries:** what was applied, what failed and why, and today's count. Runs where
+  nothing happened send nothing.
+- **Alerts** when your MCF login expires or submissions pause, at most every 6 hours.
+- **`/status`**: send it to the bot at any time.
+
+`mcf-apply run` picks up your taps at the start of each run. For instant handling, keep
+`mcf-apply bot` running. `mcf-apply notify` sends any pending cards right away.
+
 ### Safety rules
 
 - **Login:** the tool never types your Singpass details. When the session expires, the run
