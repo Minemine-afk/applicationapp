@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 from mcf_autoapply.config import Apply
 from mcf_autoapply.mcf import selectors as S
@@ -15,8 +17,46 @@ from mcf_autoapply.mcf import selectors as S
 LOGIN_TIMEOUT_S = 600
 
 
+SESSION_FILENAME = "session.json"
+
+
+def session_path(rules: Apply) -> Path:
+    return rules.browser_profile / SESSION_FILENAME
+
+
+def save_session(ctx: BrowserContext, rules: Apply) -> int:
+    """Save the browser's cookies so the MCF login survives closing the browser.
+
+    MCF's login is a session cookie (no expiry), and Chromium drops those when it closes,
+    even with a persistent profile. The file holds your MCF login: it lives in data/,
+    which git ignores. Returns how many cookies were saved.
+    """
+    state = ctx.storage_state()
+    path = session_path(rules)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"cookies": state.get("cookies", [])}), encoding="utf-8")
+    return len(state.get("cookies", []))
+
+
+def restore_session(ctx: BrowserContext, rules: Apply) -> int:
+    """Put saved cookies back into a freshly launched browser. Returns how many."""
+    path = session_path(rules)
+    if not path.exists():
+        return 0
+    try:
+        cookies = json.loads(path.read_text(encoding="utf-8")).get("cookies", [])
+        if cookies:
+            ctx.add_cookies(cookies)
+        return len(cookies)
+    except Exception:   # corrupt or stale file: carry on logged out
+        return 0
+
+
 @contextmanager
-def open_page(rules: Apply, headless: bool | None = None) -> Iterator[Page]:
+def open_page(rules: Apply, headless: bool | None = None, keep_session: bool = True,
+              ) -> Iterator[Page]:
+    """A page in the persistent profile, with the saved MCF session restored on open and
+    saved again on close (so refreshed cookies are kept too)."""
     rules.browser_profile.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
@@ -27,9 +67,16 @@ def open_page(rules: Apply, headless: bool | None = None) -> Iterator[Page]:
             locale="en-SG",
             timezone_id=rules.timezone,
         )
+        if keep_session:
+            restore_session(ctx, rules)
         try:
             yield ctx.pages[0] if ctx.pages else ctx.new_page()
         finally:
+            if keep_session:
+                try:
+                    save_session(ctx, rules)
+                except Exception:
+                    pass
             ctx.close()
 
 

@@ -95,7 +95,7 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
 def login(cfg: Config, log: Log, notifier: Notifier | None = None,
           headless: bool | None = None) -> bool:
     """Open the Singpass QR login. Each QR goes to Telegram (if linked) and stays on screen."""
-    from mcf_autoapply.mcf.browser import login_via_qr, open_page
+    from mcf_autoapply.mcf.browser import is_logged_in, login_via_qr, open_page, save_session
 
     def on_qr(qr, n):
         if notifier and notifier.send_login_qr(qr, n):
@@ -115,9 +115,28 @@ def login(cfg: Config, log: Log, notifier: Notifier | None = None,
             except Exception as e:
                 log(f"[yellow]Telegram: {e}[/yellow]")
 
+    def tell(text: str) -> None:
+        log(text)
+        if notifier:
+            notifier._send(text)
+
     log("Opening the Singpass login. Waiting up to 10 minutes for you to approve it…")
     with open_page(cfg.apply, headless=False if headless is None else headless) as page:
-        return login_via_qr(page, on_qr, on_unclear=on_unclear)
+        ok = login_via_qr(page, on_qr, on_unclear=on_unclear)
+        if ok:
+            save_session(page.context, cfg.apply)   # don't wait for close: keep it now
+    if not ok:
+        return False
+    # Prove the login survives a browser restart (the way every run opens it), so a
+    # problem shows up now rather than as "logged_out" on the next run.
+    with open_page(cfg.apply, headless=True) as page:
+        persisted = is_logged_in(page)
+    if persisted:
+        tell("💾 Login saved: it survives reopening the browser.")
+    else:
+        tell("⚠️ Logged in, but the login did not survive reopening the browser. "
+             "Runs will report logged_out. Please tell the developer.")
+    return True
 
 
 SERVE_LOCK_PORT = 47391

@@ -125,8 +125,9 @@ submissions pause. Only the linked chat is obeyed. `/login` and `/run` need `mcf
 
 ### Safety rules
 
-- **Login:** the tool never types your Singpass details. When the session expires, the run
-  stops and asks you to run `mcf-apply login` again.
+- **Login:** the tool never types your Singpass details. Your MCF login cookies are saved in
+  `data/browser-profile/session.json` (git ignores `data/`) so the login survives the browser
+  being reopened for each run. When MCF ends the session, the run stops and asks for `/login`.
 - **Answers:** screening answers only come from `answers.yml`. A job with an unanswered question
   waits in `needs_input` and is never guessed.
 - **Pacing:** submissions happen only within `active_hours`, at most `hourly_cap` per hour, with
