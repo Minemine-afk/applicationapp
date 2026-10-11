@@ -6,11 +6,12 @@ import json
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from mcf_autoapply.config import Config, Filters
+from mcf_autoapply.config import Config
 from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Database
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.models import Job
 from mcf_autoapply.pipeline.filter import JobFilter, duplicate_key
+from mcf_autoapply.pipeline.score import Ranker
 
 # Only phase-1 states are re-filtered; jobs that moved further along are left alone.
 FILTERABLE_STATUSES = (STATUS_NEW, STATUS_FILTERED, STATUS_DUPLICATE)
@@ -59,7 +60,7 @@ def discover(
                 if any(j.posted_at and j.posted_at < cutoff for j in jobs):
                     break
 
-    apply_filters(db, cfg.filters, today)
+    apply_filters(db, cfg, today)
     passed = {row["uuid"] for row in db.jobs([STATUS_NEW])}
     result.new_passed = sorted(result.new_uuids & passed)
     db.log(None, "discovery_run", {
@@ -71,9 +72,11 @@ def discover(
     return result
 
 
-def apply_filters(db: Database, rules: Filters, today: date | None = None) -> dict[str, int]:
-    """(Re-)apply the filter rules to every stored job that hasn't moved past filtering."""
-    job_filter = JobFilter(rules, today)
+def apply_filters(db: Database, cfg: Config, today: date | None = None) -> dict[str, int]:
+    """(Re-)apply filters and ranking to every stored job that hasn't moved past filtering."""
+    rules = cfg.filters
+    job_filter = JobFilter(rules, today, cfg.ranking.entry_level_keywords)
+    ranker = Ranker(cfg.profile, cfg.ranking)
     rows = db.jobs(FILTERABLE_STATUSES)
     # Oldest posting first, so the original posting is kept and later reposts are duplicates.
     rows = sorted(rows, key=lambda r: (r["posted_at"] or "", r["first_seen_at"]))
@@ -83,6 +86,7 @@ def apply_filters(db: Database, rules: Filters, today: date | None = None) -> di
     for row in rows:
         job = Job.from_api(json.loads(row["raw"]))
         reasons = job_filter.reasons(job)
+        rank = None
         if reasons:
             status, dup_of = STATUS_FILTERED, None
         else:
@@ -93,9 +97,13 @@ def apply_filters(db: Database, rules: Filters, today: date | None = None) -> di
             else:
                 status = STATUS_NEW
                 seen[key] = job.uuid
+                rank = ranker.rank(job)
         if (status, json.dumps(reasons)) != (row["status"], row["filter_reasons"]):
             db.log(job.uuid, "filtered", {"status": status, "reasons": reasons})
-        db.set_filter_result(job.uuid, status, reasons, dup_of)
+        db.set_filter_result(
+            job.uuid, status, reasons, dup_of,
+            rank.score if rank else None, rank.to_dict() if rank else None,
+        )
         counts[status] += 1
 
     db.commit()

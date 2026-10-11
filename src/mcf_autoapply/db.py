@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_seen_at     TEXT NOT NULL,
     status           TEXT NOT NULL,
     filter_reasons   TEXT NOT NULL DEFAULT '[]',
-    duplicate_of     TEXT
+    duplicate_of     TEXT,
+    score            INTEGER,
+    rank_details     TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_status_posted ON jobs (status, posted_at DESC);
 
@@ -67,6 +69,14 @@ class Database:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = {row["name"] for row in self.conn.execute("PRAGMA table_info(jobs)")}
+        for name, type_ in (("score", "INTEGER"), ("rank_details", "TEXT")):
+            if name not in cols:
+                self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {type_}")
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -113,16 +123,19 @@ class Database:
         return True
 
     def set_filter_result(
-        self, uuid: str, status: str, reasons: list[str], duplicate_of: str | None = None
+        self, uuid: str, status: str, reasons: list[str], duplicate_of: str | None = None,
+        score: int | None = None, rank_details: dict | None = None,
     ) -> None:
         self.conn.execute(
-            "UPDATE jobs SET status = ?, filter_reasons = ?, duplicate_of = ? WHERE uuid = ?",
-            (status, json.dumps(reasons), duplicate_of, uuid),
+            """UPDATE jobs SET status = ?, filter_reasons = ?, duplicate_of = ?, score = ?,
+               rank_details = ? WHERE uuid = ?""",
+            (status, json.dumps(reasons), duplicate_of, score,
+             json.dumps(rank_details) if rank_details else None, uuid),
         )
 
     def jobs(
         self, statuses: Iterable[str] | None = None, limit: int | None = None,
-        search: str | None = None,
+        search: str | None = None, sort: str = "date",
     ) -> list[sqlite3.Row]:
         sql, args = "SELECT * FROM jobs WHERE 1=1", []
         if statuses:
@@ -132,7 +145,10 @@ class Database:
         if search:
             sql += " AND (title LIKE ? OR company_name LIKE ?)"
             args += [f"%{search}%"] * 2
-        sql += " ORDER BY posted_at DESC, first_seen_at DESC"
+        if sort == "score":
+            sql += " ORDER BY score IS NULL, score DESC, posted_at DESC"
+        else:
+            sql += " ORDER BY posted_at DESC, first_seen_at DESC"
         if limit:
             sql += " LIMIT ?"
             args.append(limit)

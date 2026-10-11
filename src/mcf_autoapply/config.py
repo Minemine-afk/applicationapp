@@ -32,9 +32,20 @@ class Filters(_Strict):
     position_levels: list[str] = Field(default_factory=list)
     title_include_keywords: list[str] = Field(default_factory=list)
     title_exclude_keywords: list[str] = Field(default_factory=list)
+    seniority_keywords: list[str] = Field(default_factory=list)
     company_blocklist: list[str] = Field(default_factory=list)
     exclude_agencies: bool = False
     skip_duplicate_postings: bool = True
+
+
+class Profile(_Strict):
+    skills: list[str] = Field(default_factory=list)
+
+
+class Ranking(_Strict):
+    entry_level_keywords: list[str] = Field(default_factory=list)
+    entry_level_weight: float = Field(0.6, ge=0, le=1)
+    skills_for_full_marks: int = Field(6, ge=1)
 
 
 class Discovery(_Strict):
@@ -45,8 +56,10 @@ class Discovery(_Strict):
 
 class Config(_Strict):
     db_path: Path = Path("./data/jobs.db")
+    profile: Profile = Field(default_factory=Profile)
     searches: list[Search]
     filters: Filters = Field(default_factory=Filters)
+    ranking: Ranking = Field(default_factory=Ranking)
     discovery: Discovery = Field(default_factory=Discovery)
 
 

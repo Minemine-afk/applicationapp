@@ -11,12 +11,14 @@ from mcf_autoapply.models import Job
 OPEN_STATUSES = {"Open", "Re-open"}
 
 
-def _keyword_pattern(keywords: list[str]) -> re.Pattern | None:
+def keyword_pattern(keywords: list[str]) -> re.Pattern | None:
+    keywords = [k.strip() for k in keywords if k.strip()]
     if not keywords:
         return None
     # Whole-word match so "ai" doesn't hit "maintenance" and "intern" doesn't hit "internal".
-    alternatives = "|".join(re.escape(k.strip()) for k in keywords if k.strip())
-    return re.compile(rf"(?<![\w&])(?:{alternatives})(?![\w&])", re.IGNORECASE)
+    # Longest first so "data engineering" wins over "data engineer" in reported matches.
+    alternatives = "|".join(re.escape(k) for k in sorted(keywords, key=len, reverse=True))
+    return re.compile(rf"(?<![\w&+#])(?:{alternatives})(?![\w&+#])", re.IGNORECASE)
 
 
 def duplicate_key(job: Job) -> str:
@@ -27,11 +29,15 @@ def duplicate_key(job: Job) -> str:
 
 
 class JobFilter:
-    def __init__(self, rules: Filters, today: date | None = None) -> None:
+    def __init__(
+        self, rules: Filters, today: date | None = None, entry_level_keywords: list[str] = (),
+    ) -> None:
         self.rules = rules
         self.today = today or date.today()
-        self._include = _keyword_pattern(rules.title_include_keywords)
-        self._exclude = _keyword_pattern(rules.title_exclude_keywords)
+        self._include = keyword_pattern(rules.title_include_keywords)
+        self._exclude = keyword_pattern(rules.title_exclude_keywords)
+        self._seniority = keyword_pattern(rules.seniority_keywords)
+        self._entry = keyword_pattern(list(entry_level_keywords))
         self._employment = {t.lower() for t in rules.employment_types}
         self._levels = {lvl.lower() for lvl in rules.position_levels}
         self._blocklist = [b.lower() for b in rules.company_blocklist]
@@ -52,6 +58,9 @@ class JobFilter:
             out.append("title: no target keyword")
         if self._exclude and (m := self._exclude.search(job.title)):
             out.append(f"title: excluded keyword '{m.group(0).lower()}'")
+        if self._seniority and (m := self._seniority.search(job.title)):
+            if not (self._entry and self._entry.search(job.title)):
+                out.append(f"title: too senior ('{m.group(0).lower()}')")
 
         monthly_max = job.monthly_salary_max()
         if r.salary_min_monthly and monthly_max is not None and monthly_max < r.salary_min_monthly:

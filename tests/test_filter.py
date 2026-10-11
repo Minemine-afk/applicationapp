@@ -67,3 +67,12 @@ def test_company_blocklist_and_agencies(job_factory):
     assert reasons(job_factory(), company_blocklist=["201900001a"]) == ["company: blocklisted"]
     agency = job_factory(postedCompany={"name": "HIRE CO", "uen": "H1", "ssicCode2020": "78104"})
     assert reasons(agency, exclude_agencies=True) == ["company: recruitment agency"]
+
+
+def test_seniority_dropped_unless_title_is_also_entry_level(job_factory):
+    def r(title):
+        return JobFilter(Filters(seniority_keywords=["senior", "lead"]), today=TODAY,
+                         entry_level_keywords=["junior"]).reasons(Job.from_api(job_factory(title=title)))
+    assert r("Senior DevOps Engineer") == ["title: too senior ('senior')"]
+    assert r("Junior/ Senior DevOps Engineer") == []
+    assert r("DevOps Engineer") == []

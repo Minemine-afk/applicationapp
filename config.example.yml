@@ -1,7 +1,42 @@
-# Copy to config.yml and edit. `mcf-apply refilter` re-applies filter changes
-# to every job already stored, so you can tune these without re-downloading.
+# Copy to config.yml and edit. `mcf-apply refilter` re-applies filter and ranking
+# changes to every job already stored, so you can tune these without re-downloading.
 
 db_path: ./data/jobs.db
+
+profile:
+  # Used to rank jobs: each skill found in a job's skills list or description counts
+  # as a match (whole words, case-insensitive).
+  skills:
+    - Python
+    - Java
+    - JavaScript
+    - C++
+    - SQL
+    - React
+    - HTML
+    - FastAPI
+    - Node.js
+    - Express
+    - REST
+    - API
+    - MySQL
+    - MongoDB
+    - Power BI
+    - Spark
+    - PySpark
+    - Hadoop
+    - ETL
+    - Machine Learning
+    - Data Mining
+    - Data Analysis
+    - Data Visualization
+    - Linux
+    - Git
+    - Agile
+    - Scrum
+    - Supabase
+    - Cloudflare
+    - OCR
 
 searches:
   - query: "software engineer"
@@ -10,6 +45,11 @@ searches:
     also: ["machine learning engineer", "ML engineer", "LLM engineer", "MLOps engineer"]
   - query: "devops engineer"
     also: ["site reliability engineer", "cloud engineer", "infrastructure engineer"]
+  - query: "data analyst"
+    also: ["data engineer", "data scientist", "business intelligence", "analytics"]
+  - query: "fresh graduate software"
+    also: ["graduate software engineer", "junior software engineer", "associate software engineer",
+           "junior developer", "graduate data analyst", "junior data engineer"]
 
 filters:
   max_age_days: 14                    # ignore postings older than this
@@ -31,7 +71,6 @@ filters:
     - full stack
     - fullstack
     - full-stack
-    - application engineer
     # AI / ML
     - ai
     - genai
@@ -52,6 +91,20 @@ filters:
     - terraform
     - kubernetes
     - infrastructure engineer
+    # data
+    - data analyst
+    - data analytics
+    - data engineer
+    - data engineering
+    - data scientist
+    - data science
+    - big data
+    - data platform
+    - business analytics
+    - analytics engineer
+    - bi
+    - business intelligence
+    - etl
   title_exclude_keywords:
     - intern
     - internship
@@ -68,11 +121,16 @@ filters:
     - network
     - data centre
     - data center
+    - data entry
     - helpdesk
     - desktop support
     - infrastructure support
     - technician
-    # seniority beyond 1-2 years of experience
+    - instrumentation
+    - admissions
+  # Titles with these words are dropped as too senior, unless the title also has an
+  # entry-level keyword (e.g. "Junior/Senior DevOps Engineer" is kept).
+  seniority_keywords:
     - senior
     - sr
     - lead
@@ -86,6 +144,27 @@ filters:
   company_blocklist: []               # names (substring, case-insensitive) or UENs
   exclude_agencies: false             # true = skip recruitment agencies
   skip_duplicate_postings: true       # same company + same title already in the feed
+
+ranking:
+  # Jobs whose title has one of these, or whose MCF level is "Fresh/entry level",
+  # are ranked first.
+  entry_level_keywords:
+    - fresh grad
+    - fresh graduate
+    - fresh graduates
+    - graduate
+    - graduates
+    - junior
+    - jr
+    - entry level
+    - entry-level
+    - associate
+    - new grad
+    - early career
+    - graduate programme
+    - graduate program
+  entry_level_weight: 0.6             # share of the score for entry-level fit; the rest is skills
+  skills_for_full_marks: 6            # this many of your skills mentioned = full skills score
 
 discovery:
   page_size: 100

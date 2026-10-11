@@ -42,6 +42,10 @@ def _salary(row) -> str:
     return f"{lo:,}–{hi:,}{unit}"
 
 
+def _rank(row) -> dict:
+    return json.loads(row["rank_details"]) if row["rank_details"] else {}
+
+
 @app.command("discover")
 def discover_cmd(
     config: ConfigOpt = None,
@@ -66,7 +70,7 @@ def discover_cmd(
         f"[bold green]{len(result.new_passed)}[/bold green] passed your filters."
     )
     if result.new_passed:
-        console.print("Run [cyan]mcf-apply list[/cyan] to see them.")
+        console.print("Run [cyan]mcf-apply list[/cyan] to see them, best matches first.")
     db.close()
 
 
@@ -78,13 +82,18 @@ def list_cmd(
     ] = STATUS_NEW,
     search: Annotated[Optional[str], typer.Option("--search", "-s", help="Match title or company")] = None,
     limit: Annotated[int, typer.Option("--limit", "-n")] = 50,
+    sort: Annotated[str, typer.Option(help="score | date")] = "score",
+    fresh: Annotated[bool, typer.Option("--fresh", help="Only fresh-grad / entry-level jobs")] = False,
 ) -> None:
-    """List stored jobs (default: ones that passed the filters)."""
+    """List stored jobs, best matches first (default: ones that passed the filters)."""
     _, db = _load(config)
     statuses = None if status == "all" else [status]
-    rows = db.jobs(statuses, limit=limit, search=search)
+    rows = db.jobs(statuses, limit=None if fresh else limit, search=search, sort=sort)
+    if fresh:
+        rows = [r for r in rows if _rank(r).get("fresh_grad")][:limit]
     table = Table(show_edge=False, show_lines=False)
     table.add_column("ID", style="dim")
+    table.add_column("Score", justify="right")
     table.add_column("Posted")
     table.add_column("Title", style="bold", max_width=48)
     table.add_column("Company", max_width=30)
@@ -93,8 +102,11 @@ def list_cmd(
     if status != STATUS_NEW:
         table.add_column("Why", style="yellow", max_width=40)
     for row in rows:
+        rank = _rank(row)
+        score = "-" if row["score"] is None else str(row["score"])
+        title = row["title"] + (" [green](fresh grad)[/green]" if rank.get("fresh_grad") else "")
         cells = [
-            row["uuid"][:8], row["posted_at"] or "-", row["title"],
+            row["uuid"][:8], score, row["posted_at"] or "-", title,
             row["company_name"] + (" [dim](agency)[/dim]" if row["is_agency"] else ""),
             _salary(row),
             "-" if row["min_years_exp"] is None else f"{row['min_years_exp']}y",
@@ -129,6 +141,13 @@ def show_cmd(job_id: str, config: ConfigOpt = None) -> None:
     console.print(f"  ({'; '.join(reasons)})" if reasons else "")
     if job.skills:
         console.print(f"Skills: {', '.join(job.skills)}")
+    rank = _rank(row)
+    if rank:
+        console.print(
+            f"Score [bold]{row['score']}[/bold]  (entry-level {rank['entry_score']}: "
+            f"{', '.join(rank['entry_signals']) or 'no entry-level signals'}; "
+            f"skills {rank['skills_score']}: {', '.join(rank['matched_skills']) or 'none matched'})"
+        )
     console.print()
     console.print(job.description_text())
     db.close()
@@ -138,7 +157,7 @@ def show_cmd(job_id: str, config: ConfigOpt = None) -> None:
 def refilter_cmd(config: ConfigOpt = None) -> None:
     """Re-apply config.yml filters to every stored job (no downloading)."""
     cfg, db = _load(config)
-    counts = apply_filters(db, cfg.filters)
+    counts = apply_filters(db, cfg)
     console.print(
         f"[green]{counts[STATUS_NEW]}[/green] pass, {counts[STATUS_FILTERED]} filtered out, "
         f"{counts[STATUS_DUPLICATE]} duplicates."

@@ -80,7 +80,7 @@ def test_reposts_are_marked_duplicate(job_factory, db):
                                 postedCompany={"name": "OTHER", "uen": "O1", "ssicCode2020": "62011"})
     for raw in (repost, original, other_company):
         db.upsert_job(Job.from_api(raw), "devops")
-    counts = apply_filters(db, make_config().filters, TODAY)
+    counts = apply_filters(db, make_config(), TODAY)
     assert counts == {STATUS_NEW: 2, STATUS_FILTERED: 0, STATUS_DUPLICATE: 1}
     assert db.get_job(repost["uuid"])["duplicate_of"] == original["uuid"]
 

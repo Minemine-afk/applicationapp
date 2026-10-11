@@ -93,7 +93,10 @@ Every rejected job is stored with all its reasons, so you can audit and tune the
 
 ### 3.3 Score (`pipeline/score.py`)
 Two layers:
-1. **Skill overlap**: Jaccard similarity between the MCF `skills[]` and your skills list. Free and instant.
+1. **Rule-based rank** (built): entry-level fit (title words like *graduate* or *junior*, MCF's
+   "Fresh/entry level" level, 0–1 years required), weighted 60%, plus how many of your skills
+   appear in the job, weighted 40%. Free and instant, and needs no API key. Titles with seniority
+   words (senior, lead, principal…) are filtered out unless they also have an entry-level word.
 2. **LLM fit assessment**: send your resume, your preferences and the job description to Claude
    (default `claude-sonnet-5-5`) and ask for structured JSON output:
    ```json
