@@ -1,0 +1,82 @@
+# Copy to config.yml and edit. `mcf-apply refilter` re-applies filter changes
+# to every job already stored, so you can tune these without re-downloading.
+
+db_path: ./data/jobs.db
+
+searches:
+  - query: "software engineer"
+    also: ["software developer", "backend engineer", "full stack engineer", "platform engineer"]
+  - query: "AI engineer"
+    also: ["machine learning engineer", "ML engineer", "LLM engineer", "MLOps engineer"]
+  - query: "devops engineer"
+    also: ["site reliability engineer", "cloud engineer", "infrastructure engineer"]
+
+filters:
+  max_age_days: 14                    # ignore postings older than this
+  salary_min_monthly: 5000            # drop jobs whose top of range is below this (SGD)
+  max_years_experience_required: 8    # drop jobs asking for more than this
+  employment_types: [Full Time, Permanent, Contract]   # empty list = any
+  position_levels: []                 # e.g. [Executive, Senior Executive, Professional]
+  # The title must contain at least one of these (whole words, case-insensitive).
+  # Searches return loosely related jobs, so this keeps the feed on target.
+  title_include_keywords:
+    # software engineering
+    - software
+    - developer
+    - programmer
+    - backend
+    - back-end
+    - frontend
+    - front-end
+    - full stack
+    - fullstack
+    - full-stack
+    - application engineer
+    # AI / ML
+    - ai
+    - genai
+    - llm
+    - ml
+    - mlops
+    - machine learning
+    - deep learning
+    - nlp
+    - computer vision
+    # DevOps / platform
+    - devops
+    - devsecops
+    - sre
+    - site reliability
+    - platform engineer
+    - cloud
+    - terraform
+    - kubernetes
+    - infrastructure engineer
+  title_exclude_keywords:
+    - intern
+    - internship
+    - trainee
+    - sales
+    - presales
+    - pre-sales
+    - mechanical
+    - electrical
+    - civil
+    - m&e
+    - facilities
+    - field service
+    - network
+    - data centre
+    - data center
+    - helpdesk
+    - desktop support
+    - infrastructure support
+    - technician
+  company_blocklist: []               # names (substring, case-insensitive) or UENs
+  exclude_agencies: false             # true = skip recruitment agencies
+  skip_duplicate_postings: true       # same company + same title already in the feed
+
+discovery:
+  page_size: 100
+  max_pages: 5                        # per search term, per run
+  requests_per_second: 1

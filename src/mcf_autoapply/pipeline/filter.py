@@ -1,0 +1,81 @@
+"""Deterministic filter rules. Cheap, runs before any scoring."""
+
+from __future__ import annotations
+
+import re
+from datetime import date, timedelta
+
+from mcf_autoapply.config import Filters
+from mcf_autoapply.models import Job
+
+OPEN_STATUSES = {"Open", "Re-open"}
+
+
+def _keyword_pattern(keywords: list[str]) -> re.Pattern | None:
+    if not keywords:
+        return None
+    # Whole-word match so "ai" doesn't hit "maintenance" and "intern" doesn't hit "internal".
+    alternatives = "|".join(re.escape(k.strip()) for k in keywords if k.strip())
+    return re.compile(rf"(?<![\w&])(?:{alternatives})(?![\w&])", re.IGNORECASE)
+
+
+def duplicate_key(job: Job) -> str:
+    """Same employer + same normalised title = the same opening posted again."""
+    company = (job.company_uen or job.company_name).lower()
+    title = re.sub(r"[^a-z0-9]+", " ", job.title.lower()).strip()
+    return f"{company}|{title}"
+
+
+class JobFilter:
+    def __init__(self, rules: Filters, today: date | None = None) -> None:
+        self.rules = rules
+        self.today = today or date.today()
+        self._include = _keyword_pattern(rules.title_include_keywords)
+        self._exclude = _keyword_pattern(rules.title_exclude_keywords)
+        self._employment = {t.lower() for t in rules.employment_types}
+        self._levels = {lvl.lower() for lvl in rules.position_levels}
+        self._blocklist = [b.lower() for b in rules.company_blocklist]
+
+    def reasons(self, job: Job) -> list[str]:
+        """Every rule the job fails. An empty list means the job passes."""
+        r = self.rules
+        out: list[str] = []
+
+        if job.status not in OPEN_STATUSES:
+            out.append(f"status: {job.status or 'unknown'}")
+        if job.expires_at and job.expires_at < self.today:
+            out.append("expired")
+        if job.posted_at and job.posted_at < self.today - timedelta(days=r.max_age_days):
+            out.append(f"older than {r.max_age_days} days")
+
+        if self._include and not self._include.search(job.title):
+            out.append("title: no target keyword")
+        if self._exclude and (m := self._exclude.search(job.title)):
+            out.append(f"title: excluded keyword '{m.group(0).lower()}'")
+
+        monthly_max = job.monthly_salary_max()
+        if r.salary_min_monthly and monthly_max is not None and monthly_max < r.salary_min_monthly:
+            out.append(f"salary: max {monthly_max:,.0f} < {r.salary_min_monthly:,}")
+
+        if (
+            r.max_years_experience_required is not None
+            and job.min_years_exp is not None
+            and job.min_years_exp > r.max_years_experience_required
+        ):
+            out.append(f"experience: needs {job.min_years_exp}+ years")
+
+        if self._employment and job.employment_types:
+            if not self._employment & {t.lower() for t in job.employment_types}:
+                out.append(f"employment type: {', '.join(job.employment_types)}")
+        if self._levels and job.position_levels:
+            if not self._levels & {p.lower() for p in job.position_levels}:
+                out.append(f"position level: {', '.join(job.position_levels)}")
+
+        name = job.company_name.lower()
+        uen = (job.company_uen or "").lower()
+        if any(b == uen or b in name for b in self._blocklist):
+            out.append("company: blocklisted")
+        if r.exclude_agencies and job.is_agency:
+            out.append("company: recruitment agency")
+
+        return out

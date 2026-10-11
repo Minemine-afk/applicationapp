@@ -65,6 +65,9 @@ each application or setting rules for which ones go through without asking.
 - Stop paging when a whole page holds jobs already in the DB, or when the posting date is older
   than `max_age_days`.
 - Upsert by `uuid`. Store the raw JSON so later re-scoring doesn't need re-fetching.
+- Results come back newest first (`sortBy=new_posting_date`), so paging stops at the first
+  page that has no new jobs or reaches postings older than `max_age_days`. A repeat run takes
+  about one request per search term.
 - **Title synonyms**: each search can list `also:` titles ("BI analyst", "reporting analyst",
   "analytics executive"). Each one is queried, and results are de-duplicated by `uuid`.
 - Runs **hourly during active hours** (default 08:00–22:00 SGT), so new postings are scored
@@ -79,7 +82,14 @@ Rules from `config.yml`:
 - `title_exclude_keywords` (e.g. "intern", "sales commission only")
 - Skip jobs that aren't `Open`, and skip companies already applied to in the last N days.
 
-Every rejected job is stored with a reason, so you can audit and tune the rules.
+- `title_include_keywords`: the title must contain one of these as a whole word. Searches return
+  loosely related jobs ("cloud engineer" also returns network and data-centre roles), so this keeps
+  the feed on target.
+- Reposts: the same employer and normalised title as a job already in the feed is marked
+  `duplicate`. Agencies often post one opening several times.
+
+Every rejected job is stored with all its reasons, so you can audit and tune the rules.
+`mcf-apply refilter` re-applies changed rules to every stored job without downloading again.
 
 ### 3.3 Score (`pipeline/score.py`)
 Two layers:
@@ -167,7 +177,7 @@ Later outcome states are updated by hand in the dashboard, or by parsing MCF's
 
 ---
 
-## 4. Data model (SQLite via SQLModel)
+## 4. Data model (SQLite)
 
 ```text
 jobs(uuid PK, job_post_id, title, company_name, company_uen, salary_min, salary_max,
@@ -256,7 +266,7 @@ Secrets (`ANTHROPIC_API_KEY`, optional Telegram bot token) go in `.env` and are 
 | Language | Python 3.12 | Best Playwright and LLM SDK support, quick to iterate |
 | HTTP | `httpx` + `tenacity` | Async calls, retries with backoff |
 | Browser | Playwright (Chromium, persistent context) | Reliable waits, screenshots, keeps the session |
-| DB | SQLite + SQLModel | Single file, no server to run |
+| DB | SQLite (Python's built-in `sqlite3`) | Single file, no server to run |
 | LLM | Anthropic SDK, structured outputs | Scoring JSON and cover letters |
 | CLI | Typer | `mcf-apply discover / score / review / apply / run` |
 | Dashboard | FastAPI + HTMX + Jinja | A small review UI without a JavaScript build step |
@@ -306,6 +316,7 @@ applicationapp/
 │   │   ├── session.py      # login / session check
 │   │   └── selectors.py
 │   ├── pipeline/
+│   │   ├── discover.py     # search → store → filter
 │   │   ├── filter.py
 │   │   ├── score.py
 │   │   ├── tailor.py
@@ -324,7 +335,7 @@ applicationapp/
 
 | Phase | Deliverable | Value on its own |
 |---|---|---|
-| **1. Discover + filter** | `mcf-apply discover` fills SQLite; `mcf-apply list` shows matches | A better job feed than MCF's email alerts |
+| **1. Discover + filter** ✅ | `mcf-apply discover` fills SQLite; `mcf-apply list` shows matches | A better job feed than MCF's email alerts |
 | **2. Score + tailor** | LLM fit scores, gap analysis, draft cover letters | Shows where to spend effort |
 | **3. Review dashboard** | Approve / edit / skip UI, answer-bank editor | One place to manage everything |
 | **4. Apply (dry run)** | Playwright fills forms up to the submit button and saves screenshots | Lets you check the automation safely |
