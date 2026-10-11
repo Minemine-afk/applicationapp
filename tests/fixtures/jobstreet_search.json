@@ -1,0 +1,203 @@
+{
+ "data": [
+  {
+   "id": "95188714",
+   "title": "Junior QA Engineer (Electronics Manufacturing)",
+   "companyName": "Search Personnel",
+   "advertiser": {
+    "id": "60534146",
+    "description": "Search Personnel Pte Ltd"
+   },
+   "salaryLabel": "$3,500 \u2013 $4,500 per month",
+   "listingDate": "2026-10-11T05:42:53Z",
+   "workTypes": [
+    "Full time"
+   ],
+   "teaser": "Grow your career as a Junior QA Engineer! Support audits, quality investigations and improvements in electronics manufacturing.",
+   "bulletPoints": [],
+   "locations": [
+    {
+     "label": "Toa Payoh, Central Region",
+     "countryCode": "SG"
+    }
+   ],
+   "classifications": [
+    {
+     "classification": {
+      "description": "Engineering"
+     }
+    }
+   ],
+   "workArrangements": {
+    "data": [
+     {
+      "id": "1",
+      "label": {
+       "text": "On-site"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "94584706",
+   "title": "Technology Evangelist, Southeast Asia",
+   "companyName": "Apple",
+   "advertiser": {
+    "id": "5431205",
+    "description": "Apple"
+   },
+   "salaryLabel": "",
+   "listingDate": "2026-10-11T05:00:35Z",
+   "workTypes": [
+    "Full time"
+   ],
+   "teaser": "Shape the future of app development. Guide developers across Southeast Asia to build innovative experiences with cutting-edge Apple tech.",
+   "bulletPoints": [],
+   "locations": [
+    {
+     "label": "Singapore",
+     "countryCode": "SG"
+    }
+   ],
+   "classifications": [
+    {
+     "classification": {
+      "description": "Information & Communication Technology"
+     }
+    }
+   ],
+   "workArrangements": {
+    "data": [
+     {
+      "id": "1",
+      "label": {
+       "text": "On-site"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "95189052",
+   "title": "Senior Staff Test Engineering Lead",
+   "companyName": "AMD",
+   "advertiser": {
+    "id": "60480618",
+    "description": "Advanced Micro Devices (S) Pte Ltd"
+   },
+   "salaryLabel": "",
+   "listingDate": "2026-10-11T01:41:00Z",
+   "workTypes": [
+    "Full time"
+   ],
+   "teaser": "The Technical Lead is responsible for the test solution for a next-generation AMD Products. This position serves as the Test Engineering team's...",
+   "bulletPoints": [],
+   "locations": [
+    {
+     "label": "Singapore",
+     "countryCode": "SG"
+    }
+   ],
+   "classifications": [
+    {
+     "classification": {
+      "description": "Engineering"
+     }
+    }
+   ],
+   "workArrangements": {
+    "data": [
+     {
+      "id": "1",
+      "label": {
+       "text": "On-site"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "95188258",
+   "title": "Product Development & Test Engineers",
+   "advertiser": {
+    "id": "61941084",
+    "description": "BITSILICA PTE. LTD."
+   },
+   "salaryLabel": "",
+   "listingDate": "2026-10-11T01:24:08Z",
+   "workTypes": [
+    "Full time"
+   ],
+   "teaser": "\u2022 Experience skillsets on Test IPs such as Scan, MBIST, Functional, Analog-mixed signals\nand High Speed I/O test, DFT concepts\no Scan, Ethernet,...",
+   "bulletPoints": [],
+   "locations": [
+    {
+     "label": "Singapore",
+     "countryCode": "SG"
+    }
+   ],
+   "classifications": [
+    {
+     "classification": {
+      "description": "Engineering"
+     }
+    }
+   ],
+   "workArrangements": {
+    "data": [
+     {
+      "id": "1",
+      "label": {
+       "text": "On-site"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "94578617",
+   "title": "Research Associate (Computer engineering/Computer Science/Electronics...",
+   "companyName": "Nanyang Technological University",
+   "advertiser": {
+    "id": "60227121",
+    "description": "Nanyang Technological University"
+   },
+   "salaryLabel": "",
+   "listingDate": "2026-10-11T00:00:23Z",
+   "workTypes": [
+    "Full time"
+   ],
+   "teaser": "Drive cutting-edge AI and data science research. Develop novel algorithms and publish groundbreaking work.",
+   "bulletPoints": [
+    "Ranked 12th Best University in QS World University Rankings",
+    "A progressive environment with ample opportunities for growth and development",
+    "Customisable benefits programme with option to include dependants"
+   ],
+   "locations": [
+    {
+     "label": "Singapore",
+     "countryCode": "SG"
+    }
+   ],
+   "classifications": [
+    {
+     "classification": {
+      "description": "Sales"
+     }
+    }
+   ],
+   "workArrangements": {
+    "data": [
+     {
+      "id": "1",
+      "label": {
+       "text": "On-site"
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "totalCount": 5268
+}

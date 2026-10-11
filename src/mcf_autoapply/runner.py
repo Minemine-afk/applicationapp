@@ -16,6 +16,7 @@ from mcf_autoapply.overrides import apply_overrides
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import discover
+from mcf_autoapply.sources import short_id
 
 Log = Callable[[str], None]   # receives rich markup
 
@@ -86,9 +87,12 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
     with MCFClient(cfg.discovery.requests_per_second) as client:
         found = discover(cfg, db, client)
         log(f"Discovered {len(found.new_uuids)} new, {len(found.new_passed)} passed filters.")
+        for problem in found.problems:
+            log(f"[yellow]{problem}[/yellow]")
+            notifier.alert("discover:" + problem.split(":")[0], problem)
         decisions = Q.auto_approve(cfg, db, client, AnswerBank(cfg.apply.answers_path))
     for d in decisions:
-        log(f"{styled_state(d.state)} {d.job_uuid[:8]}  {d.title}"
+        log(f"{styled_state(d.state)} {short_id(d.job_uuid)}  {d.title}"
             + (f"  [dim]{d.note}[/dim]" if d.note else ""))
     notifier.send_question_cards()
     notifier.send_review_cards()

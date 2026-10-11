@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     filter_reasons   TEXT NOT NULL DEFAULT '[]',
     duplicate_of     TEXT,
     score            INTEGER,
-    rank_details     TEXT
+    rank_details     TEXT,
+    source           TEXT NOT NULL DEFAULT 'mcf'
 );
 CREATE INDEX IF NOT EXISTS jobs_status_posted ON jobs (status, posted_at DESC);
 
@@ -110,7 +111,8 @@ class Database:
 
     def _migrate(self) -> None:
         cols = {row["name"] for row in self.conn.execute("PRAGMA table_info(jobs)")}
-        for name, type_ in (("score", "INTEGER"), ("rank_details", "TEXT")):
+        for name, type_ in (("score", "INTEGER"), ("rank_details", "TEXT"),
+                            ("source", "TEXT NOT NULL DEFAULT 'mcf'")):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {type_}")
         self.conn.commit()
@@ -147,16 +149,16 @@ class Database:
             """INSERT INTO jobs (uuid, job_post_id, title, company_name, company_uen, is_agency,
                salary_min, salary_max, salary_type, employment_types, position_levels,
                min_years_exp, skills, url, posted_at, expires_at, source_code, search_terms,
-               raw, first_seen_at, last_seen_at, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               raw, first_seen_at, last_seen_at, status, source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (job.uuid, job.job_post_id, job.title, job.company_name, job.company_uen,
              int(job.is_agency), job.salary_min, job.salary_max, job.salary_type,
              json.dumps(job.employment_types), json.dumps(job.position_levels),
              job.min_years_exp, json.dumps(job.skills), job.url, _iso(job.posted_at),
              _iso(job.expires_at), job.source_code, json.dumps([search_term]),
-             json.dumps(job.raw), now, now, STATUS_NEW),
+             json.dumps(job.raw), now, now, STATUS_NEW, job.source),
         )
-        self.log(job.uuid, "discovered", {"search_term": search_term})
+        self.log(job.uuid, "discovered", {"search_term": search_term, "source": job.source})
         return True
 
     def set_filter_result(

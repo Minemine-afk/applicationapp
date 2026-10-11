@@ -22,10 +22,18 @@ def keyword_pattern(keywords: list[str]) -> re.Pattern | None:
 
 
 def duplicate_key(job: Job) -> str:
-    """Same employer + same normalised title = the same opening posted again."""
-    company = (job.company_uen or job.company_name).lower()
-    title = re.sub(r"[^a-z0-9]+", " ", job.title.lower()).strip()
-    return f"{company}|{title}"
+    """Same employer + same normalised title = the same opening posted again.
+
+    Compares company *names* (normalised), not registration numbers, so the same opening on
+    two sites matches; a name like "ACME PTE. LTD." and "Acme Pte Ltd" matches too.
+    """
+    company = _norm(job.company_name) or (job.company_uen or "").lower()
+    return f"{company}|{_norm(job.title)}"
+
+
+def _norm(text: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+    return re.sub(r"\b(pte|ltd|limited|llp|inc|co|company|singapore|branch)\b", "", text).strip()
 
 
 class JobFilter:

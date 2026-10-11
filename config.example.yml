@@ -38,13 +38,18 @@ profile:
     - Cloudflare
     - OCR
 
+# Each search can name the sites to search: mcf (always available) and jobstreet
+# (needs jobstreet.enabled below). JobStreet searches are fuzzier, so fewer terms are used.
 searches:
   - query: "software engineer"
     also: ["software developer", "backend engineer", "full stack engineer", "platform engineer"]
+    sources: [mcf, jobstreet]
   - query: "AI engineer"
     also: ["machine learning engineer", "ML engineer", "LLM engineer", "MLOps engineer"]
+    sources: [mcf, jobstreet]
   - query: "devops engineer"
     also: ["site reliability engineer", "cloud engineer", "infrastructure engineer"]
+    sources: [mcf, jobstreet]
   - query: "data analyst"
     also: ["data engineer", "data scientist", "business intelligence", "analytics"]
   - query: "fresh graduate software"
@@ -194,6 +199,20 @@ telegram:
   quick_review_min_score: 60          # jobs from here up to auto_apply_min_score come to your phone
   max_cards_per_run: 8
   alert_every_hours: 6                # same alert (e.g. login expired) at most this often
+
+jobstreet:
+  # JobStreet (sg.jobstreet.com). OFF by default. Its robots.txt disallows the search API it
+  # uses and its terms forbid automated applications: an account doing this can be suspended.
+  # Turn it on only if you accept that. Limits here are per JobStreet, on top of apply.*.
+  enabled: false
+  where: Singapore
+  page_size: 30
+  max_pages: 3
+  requests_per_second: 0.5
+  hourly_cap: 2
+  daily_cap: 8
+  allow_auto: false                   # true = auto mode may also approve JobStreet jobs
+  resume_name: ""                     # part of a saved resume's name on JobStreet; "" = first
 
 serve:
   # `mcf-apply serve` keeps running on a home machine: a full run every interval,

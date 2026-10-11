@@ -19,9 +19,14 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+SOURCE_NAMES = ("mcf", "jobstreet")
+
+
 class Search(_Strict):
     query: str
     also: list[str] = Field(default_factory=list)
+    # Which sites to search. JobStreet is only used when jobstreet.enabled is true.
+    sources: list[Literal["mcf", "jobstreet"]] = Field(default_factory=lambda: ["mcf"])
 
     def terms(self) -> list[str]:
         return [self.query, *self.also]
@@ -88,6 +93,21 @@ class Telegram(_Strict):
     alert_every_hours: float = Field(6, gt=0)   # don't repeat the same alert more often
 
 
+class JobStreet(_Strict):
+    """JobStreet (sg.jobstreet.com). Off by default: its robots.txt disallows the search API and
+    its terms forbid automated applications, so an account doing this can be suspended."""
+    enabled: bool = False
+    site_key: str = "SG-Main"
+    where: str = "Singapore"
+    page_size: int = Field(30, ge=1, le=100)
+    max_pages: int = Field(3, ge=1)
+    requests_per_second: float = Field(0.5, gt=0, le=2)
+    hourly_cap: int = Field(2, ge=1)
+    daily_cap: int = Field(8, ge=1)
+    allow_auto: bool = False          # never auto-approve JobStreet jobs until this is true
+    resume_name: str = ""             # part of the saved-resume name on JobStreet; "" = first
+
+
 class Serve(_Strict):
     """`mcf-apply serve`: the always-on mode for a home machine."""
     interval_minutes: int = Field(60, ge=15)
@@ -111,6 +131,10 @@ class Config(_Strict):
     apply: Apply = Field(default_factory=Apply)
     telegram: Telegram = Field(default_factory=Telegram)
     serve: Serve = Field(default_factory=Serve)
+    jobstreet: JobStreet = Field(default_factory=JobStreet)
+
+    def enabled_sources(self) -> list[str]:
+        return ["mcf"] + (["jobstreet"] if self.jobstreet.enabled else [])
     discovery: Discovery = Field(default_factory=Discovery)
 
 

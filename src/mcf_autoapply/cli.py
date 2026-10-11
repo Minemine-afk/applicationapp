@@ -15,7 +15,7 @@ from rich.table import Table
 from mcf_autoapply.config import Config, get_env, load_config
 from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Database
 from mcf_autoapply.mcf.client import MCFClient
-from mcf_autoapply.models import Job
+from mcf_autoapply.models import job_from_row
 from mcf_autoapply.notify import CHAT_ID_KEY, Notifier
 from mcf_autoapply.overrides import apply_overrides
 from mcf_autoapply import runner as R
@@ -23,6 +23,7 @@ from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import apply_filters, discover
 from mcf_autoapply.pipeline.pacer import Pacer
+from mcf_autoapply.sources import LABELS, short_id
 from mcf_autoapply.telegram import TelegramAPI, TelegramError
 
 app = typer.Typer(help="Find, rank and apply to jobs on MyCareersFuture.", no_args_is_help=True)
@@ -65,16 +66,19 @@ def discover_cmd(
     cfg, db = _load(config)
     if max_pages:
         cfg.discovery.max_pages = max_pages
-    with MCFClient(cfg.discovery.requests_per_second) as client, console.status("Searching MCF…"):
-        result = discover(cfg, db, client)
+    with console.status("Searching…"):
+        result = discover(cfg, db)
 
     table = Table(title="Discovery", show_edge=False)
+    table.add_column("Site")
     table.add_column("Search term")
     table.add_column("Fetched", justify="right")
     table.add_column("New", justify="right")
     for tr in result.terms:
-        table.add_row(tr.term, str(tr.fetched), str(tr.new))
+        table.add_row(LABELS.get(tr.source, tr.source), tr.term, str(tr.fetched), str(tr.new))
     console.print(table)
+    for problem in result.problems:
+        console.print(f"[yellow]{problem}[/yellow]")
     console.print(
         f"\n[bold]{len(result.new_uuids)}[/bold] new jobs, "
         f"[bold green]{len(result.new_passed)}[/bold green] passed your filters."
@@ -103,6 +107,7 @@ def list_cmd(
         rows = [r for r in rows if _rank(r).get("fresh_grad")][:limit]
     table = Table(show_edge=False, show_lines=False)
     table.add_column("ID", style="dim")
+    table.add_column("Site")
     table.add_column("Score", justify="right")
     table.add_column("Posted")
     table.add_column("Title", style="bold", max_width=48)
@@ -116,7 +121,8 @@ def list_cmd(
         score = "-" if row["score"] is None else str(row["score"])
         title = row["title"] + (" [green](fresh grad)[/green]" if rank.get("fresh_grad") else "")
         cells = [
-            row["uuid"][:8], score, row["posted_at"] or "-", title,
+            short_id(row["uuid"]), LABELS.get(row["source"], row["source"]), score,
+            row["posted_at"] or "-", title,
             row["company_name"] + (" [dim](agency)[/dim]" if row["is_agency"] else ""),
             _salary(row),
             "-" if row["min_years_exp"] is None else f"{row['min_years_exp']}y",
@@ -137,7 +143,7 @@ def show_cmd(job_id: str, config: ConfigOpt = None) -> None:
     if not row:
         console.print(f"[red]No unique job matches '{job_id}'.[/red]")
         raise typer.Exit(1)
-    job = Job.from_api(json.loads(row["raw"]))
+    job = job_from_row(row)
     console.print(f"[bold]{job.title}[/bold]  ·  {job.company_name}")
     console.print(f"[link={job.url}]{job.url}[/link]")
     console.print(
@@ -202,7 +208,7 @@ def _print_decisions(decisions) -> None:
     for d in decisions:
         style = STATE_STYLE.get(d.state, "white")
         note = f"  [dim]{d.note}[/dim]" if d.note else ""
-        console.print(f"[{style}]{d.state:<15}[/{style}] {d.job_uuid[:8]}  {d.title}{note}")
+        console.print(f"[{style}]{d.state:<15}[/{style}] {short_id(d.job_uuid)}  {d.title}{note}")
 
 
 @app.command("approve")
@@ -243,7 +249,7 @@ def queue_cmd(
     for r in rows:
         style = STATE_STYLE.get(r["state"], "white")
         note = r["error"] or (r["submitted_at"] or "")[:16].replace("T", " ")
-        table.add_row(r["job_uuid"][:8], f"[{style}]{r['state']}[/{style}]",
+        table.add_row(short_id(r["job_uuid"]), f"[{style}]{r['state']}[/{style}]",
                       "-" if r["score"] is None else str(r["score"]), r["title"],
                       r["company_name"], note)
     console.print(table)

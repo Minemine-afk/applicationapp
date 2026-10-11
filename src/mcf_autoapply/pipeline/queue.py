@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from mcf_autoapply.config import Config
 from mcf_autoapply.db import STATUS_NEW, Database
-from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline.answers import AnswerBank
+from mcf_autoapply.sources import source_of
 
 # Application states (DESIGN.md §3.8).
 NEEDS_INPUT = "needs_input"      # a screening question has no saved answer yet
@@ -35,8 +35,10 @@ class Decision:
 
 
 def approve(
-    db: Database, client: MCFClient, bank: AnswerBank, uuids: Iterable[str], by: str = "user",
+    db: Database, client, bank: AnswerBank, uuids: Iterable[str], by: str = "user",
 ) -> list[Decision]:
+    """Queue jobs. `client` fetches MCF screening questions; JobStreet's are only visible in
+    its apply form, so those jobs queue with none and the applier asks if it meets any."""
     out = []
     for uuid in uuids:
         job = db.get_job(uuid)
@@ -57,7 +59,9 @@ def approve(
                                 "MCF lists this (or the same job at this employer) as applied"))
             continue
         raw = json.loads(job["raw"])
-        if raw.get("psdUrl"):
+        if source_of(job["uuid"]) != "mcf":
+            state, questions, answers, note = APPROVED, [], [], ""
+        elif raw.get("psdUrl"):
             state, questions, answers, note = EXTERNAL, [], [], "apply on Careers@Gov"
         else:
             questions = client.screening_questions(job["uuid"])
@@ -96,7 +100,7 @@ def skip(db: Database, uuids: Iterable[str]) -> list[Decision]:
 
 
 def auto_approve(
-    cfg: Config, db: Database, client: MCFClient, bank: AnswerBank, limit: int | None = None,
+    cfg: Config, db: Database, client, bank: AnswerBank, limit: int | None = None,
 ) -> list[Decision]:
     """In auto mode, approve unseen jobs scoring at or above the threshold."""
     if cfg.apply.mode != "auto":
@@ -107,6 +111,8 @@ def auto_approve(
             break   # sorted by score, so nothing further qualifies
         if db.application(job["uuid"]) or _mcf_says_applied(db, job):
             continue
+        if source_of(job["uuid"]) == "jobstreet" and not cfg.jobstreet.allow_auto:
+            continue   # JobStreet jobs wait for a tap unless you opt in
         details = json.loads(job["rank_details"] or "{}")
         if cfg.apply.auto_apply_fresh_grad_only and not details.get("fresh_grad"):
             continue

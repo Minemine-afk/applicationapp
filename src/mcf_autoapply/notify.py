@@ -18,6 +18,7 @@ from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.pacer import Pacer
+from mcf_autoapply.sources import LABELS, SITE_NAMES
 from mcf_autoapply.telegram import TelegramAPI, TelegramError
 
 CHAT_ID_KEY = "tg:chat_id"
@@ -512,6 +513,7 @@ def job_card(job) -> str:
     exp = "" if job["min_years_exp"] is None else f" · {job['min_years_exp']}y exp"
     skills = ", ".join(details.get("matched_skills", [])[:6]) or "none matched"
     fresh = " · 🎓 fresh grad" if details.get("fresh_grad") else ""
+    source = job["source"] if "source" in job.keys() else "mcf"
     return (f"<b>{escape(job['title'])}</b>\n{escape(job['company_name'])}{salary}{exp}\n"
-            f"Score {job['score']}{fresh}\nSkills: {escape(skills)}\n"
-            f'<a href="{escape(job["url"])}">View on MyCareersFuture</a>')
+            f"Score {job['score']}{fresh} · {LABELS.get(source, source)}\nSkills: {escape(skills)}\n"
+            f'<a href="{escape(job["url"])}">View on {SITE_NAMES.get(source, source)}</a>')

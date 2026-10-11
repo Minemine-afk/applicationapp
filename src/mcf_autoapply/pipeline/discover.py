@@ -8,10 +8,10 @@ from datetime import date, timedelta
 
 from mcf_autoapply.config import Config
 from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Database
-from mcf_autoapply.mcf.client import MCFClient
-from mcf_autoapply.models import Job
+from mcf_autoapply.models import job_from_row
 from mcf_autoapply.pipeline.filter import JobFilter, duplicate_key
 from mcf_autoapply.pipeline.score import Ranker
+from mcf_autoapply.sources import PRIORITY, Source, close_sources, open_sources
 
 # Only phase-1 states are re-filtered; jobs that moved further along are left alone.
 FILTERABLE_STATUSES = (STATUS_NEW, STATUS_FILTERED, STATUS_DUPLICATE)
@@ -22,6 +22,7 @@ class TermResult:
     term: str
     fetched: int = 0
     new: int = 0
+    source: str = "mcf"
 
 
 @dataclass
@@ -29,36 +30,43 @@ class DiscoveryResult:
     terms: list[TermResult] = field(default_factory=list)
     new_uuids: set[str] = field(default_factory=set)
     new_passed: list[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)   # e.g. a site blocking searches
 
 
 def discover(
-    cfg: Config, db: Database, client: MCFClient, today: date | None = None
+    cfg: Config, db: Database, client=None, today: date | None = None,
+    sources: dict[str, Source] | None = None,
 ) -> DiscoveryResult:
+    """Search every enabled site for every saved search, store new jobs, then filter.
+
+    `client` is an MCF client (kept for older callers); `sources` overrides the registry.
+    """
     today = today or date.today()
     cutoff = today - timedelta(days=cfg.filters.max_age_days)
     result = DiscoveryResult()
+    own = sources is None
+    sources = sources or open_sources(cfg, db, mcf_client=client)
+    enabled = set(cfg.enabled_sources()) | set(sources)
+    skip: set[str] = set()   # sources that failed this run (e.g. blocked)
 
-    for search in cfg.searches:
-        for term in search.terms():
-            tr = TermResult(term)
-            result.terms.append(tr)
-            for page in client.search(
-                term, limit=cfg.discovery.page_size, max_pages=cfg.discovery.max_pages
-            ):
-                known = db.existing_uuids(r["uuid"] for r in page)
-                jobs = [Job.from_api(r) for r in page]
-                for job in jobs:
-                    tr.fetched += 1
-                    if db.upsert_job(job, term):
-                        tr.new += 1
-                        result.new_uuids.add(job.uuid)
-                db.commit()
-                # Results are newest first, so once a page has nothing new, or reaches
-                # postings older than the cutoff, later pages only hold older jobs.
-                if len(known) == len(page):
-                    break
-                if any(j.posted_at and j.posted_at < cutoff for j in jobs):
-                    break
+    try:
+        for search in cfg.searches:
+            for name in search.sources:
+                src = sources.get(name)
+                if src is None or name not in enabled or name in skip:
+                    continue
+                for term in search.terms():
+                    tr = TermResult(term, source=name)
+                    result.terms.append(tr)
+                    try:
+                        _search_term(db, src, term, tr, result, cutoff)
+                    except Exception as e:   # one site's trouble must not stop the others
+                        result.problems.append(f"{name}: {e}")
+                        skip.add(name)
+                        break
+    finally:
+        if own:
+            close_sources(sources)
 
     apply_filters(db, cfg, today)
     passed = {row["uuid"] for row in db.jobs([STATUS_NEW])}
@@ -72,19 +80,40 @@ def discover(
     return result
 
 
+def _search_term(db: Database, src: Source, term: str, tr: TermResult,
+                 result: DiscoveryResult, cutoff: date) -> None:
+    for page in src.search(term):
+        jobs = [src.to_job(r) for r in page]
+        known = db.existing_uuids(j.uuid for j in jobs)
+        for job in jobs:
+            tr.fetched += 1
+            if db.upsert_job(job, term):
+                tr.new += 1
+                result.new_uuids.add(job.uuid)
+        db.commit()
+        # Results are newest first, so once a page has nothing new, or reaches postings
+        # older than the cutoff, later pages only hold older jobs.
+        if len(known) == len(page):
+            break
+        if any(j.posted_at and j.posted_at < cutoff for j in jobs):
+            break
+
+
 def apply_filters(db: Database, cfg: Config, today: date | None = None) -> dict[str, int]:
     """(Re-)apply filters and ranking to every stored job that hasn't moved past filtering."""
     rules = cfg.filters
     job_filter = JobFilter(rules, today, cfg.ranking.entry_level_keywords)
     ranker = Ranker(cfg.profile, cfg.ranking)
     rows = db.jobs(FILTERABLE_STATUSES)
-    # Oldest posting first, so the original posting is kept and later reposts are duplicates.
-    rows = sorted(rows, key=lambda r: (r["posted_at"] or "", r["first_seen_at"]))
+    # The first row for an opening is kept and later ones become duplicates: prefer the site
+    # with the reliable apply flow (MCF), then the oldest posting.
+    rows = sorted(rows, key=lambda r: (PRIORITY.get(r["source"], 9), r["posted_at"] or "",
+                                       r["first_seen_at"]))
     seen: dict[str, str] = {}
     counts = {STATUS_NEW: 0, STATUS_FILTERED: 0, STATUS_DUPLICATE: 0}
 
     for row in rows:
-        job = Job.from_api(json.loads(row["raw"]))
+        job = job_from_row(row)
         reasons = job_filter.reasons(job)
         rank = None
         if reasons:
