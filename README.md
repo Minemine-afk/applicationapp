@@ -163,7 +163,11 @@ To turn it on, send **/jobstreet on** to the bot (or set `jobstreet.enabled: tru
 `config.yml`). Searches then run on both sites unless a search names its own `sources`. Then:
 
 - `/login jobstreet` opens JobStreet's sign-in in a browser window on the PC. Sign in there
-  (email + code, or Google); nothing is typed for you. The session is saved like MCF's.
+  (email + code, or Google); nothing is typed for you. The session is saved like MCF's. The
+  sign-in page runs reCAPTCHA, which flags automated browsers: the app therefore uses the PC's
+  real Google Chrome when it's installed (`apply.browser_channel`) and hides the usual
+  automation markers. If it still says "Verification failed", try **Continue with Google**;
+  if that's blocked too, JobStreet can't be logged in from the app.
 - JobStreet jobs appear in `/jobs` cards with a **JobStreet** badge. Only **Quick apply** jobs
   are applied to; ones that send you to the employer's own site are marked `external`.
 - Employer questions are only visible inside the form. A job whose questions aren't all in

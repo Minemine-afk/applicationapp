@@ -17,6 +17,37 @@ from mcf_autoapply.mcf import selectors as S
 LOGIN_TIMEOUT_S = 600
 
 
+# Don't announce automation: sites' bot checks look for these.
+STEALTH_ARGS = ["--disable-blink-features=AutomationControlled", "--no-first-run",
+                "--no-default-browser-check"]
+STEALTH_SCRIPT = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+
+
+def launch_context(p, rules: Apply, headless: bool) -> BrowserContext:
+    """The persistent profile in the real Chrome when it's installed, else the bundled one."""
+    common = dict(headless=headless, viewport={"width": 1280, "height": 900}, locale="en-SG",
+                  timezone_id=rules.timezone, args=STEALTH_ARGS,
+                  ignore_default_args=["--enable-automation"])
+    attempts = []
+    if rules.browser_executable:
+        attempts.append({"executable_path": str(rules.browser_executable)})
+    else:
+        if rules.browser_channel:
+            attempts.append({"channel": rules.browser_channel})
+        attempts.append({})
+    last: Exception | None = None
+    for extra in attempts:
+        try:
+            ctx = p.chromium.launch_persistent_context(str(rules.browser_profile), **common, **extra)
+            break
+        except Exception as e:   # e.g. Chrome not installed: try the next option
+            last = e
+    else:
+        raise last  # type: ignore[misc]
+    ctx.add_init_script(STEALTH_SCRIPT)
+    return ctx
+
+
 SESSION_FILENAME = "session.json"
 
 
@@ -59,14 +90,7 @@ def open_page(rules: Apply, headless: bool | None = None, keep_session: bool = T
     saved again on close (so refreshed cookies are kept too)."""
     rules.browser_profile.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            str(rules.browser_profile),
-            headless=rules.headless if headless is None else headless,
-            executable_path=str(rules.browser_executable) if rules.browser_executable else None,
-            viewport={"width": 1280, "height": 900},
-            locale="en-SG",
-            timezone_id=rules.timezone,
-        )
+        ctx = launch_context(p, rules, rules.headless if headless is None else headless)
         if keep_session:
             restore_session(ctx, rules)
         try:

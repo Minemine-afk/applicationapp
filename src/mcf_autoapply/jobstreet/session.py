@@ -45,7 +45,10 @@ def login(page: Page, on_status: Callable[[str], None], home_url: str = S.HOME_U
     else:
         page.goto(S.LOGIN_URL, wait_until="domcontentloaded")
     on_status("JobStreet's sign-in page is open in the browser window on the PC. "
-              "Sign in there (email + the code it sends, or Google). Nothing is typed for you.")
+              "Sign in there (email + the code it sends, or Continue with Google). Nothing is "
+              "typed for you. If it says \"Please complete the recaptcha\" or \"Verification "
+              "failed\", that's its bot check: wait a few seconds and try once more, or use "
+              "Continue with Google instead.")
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if is_logged_in(page, home_url):

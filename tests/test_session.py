@@ -71,3 +71,23 @@ def test_corrupt_session_file_is_ignored(rules):
         serve_site(page)
         page.goto(SITE)
         assert names(page) == {}
+
+
+def test_falls_back_to_bundled_browser_and_hides_automation(tmp_path):
+    """Chrome isn't installed here: channel='chrome' must fall back, and the page must not
+    announce automation (navigator.webdriver is what bot checks look at first)."""
+    if not os.path.exists(CHROMIUM):
+        pytest.skip("Chromium not available")
+    rules = Apply(browser_profile=tmp_path / "p", browser_channel="chrome", headless=True)
+    try:
+        with open_page(rules, keep_session=False) as page:
+            page.goto("about:blank")
+            assert page.evaluate("navigator.webdriver") is None
+    except Exception as e:   # bundled default chromium build may be missing in this sandbox
+        if "Executable doesn't exist" not in str(e):
+            raise
+        rules = Apply(browser_profile=tmp_path / "p2", browser_executable=Path(CHROMIUM),
+                      headless=True)
+        with open_page(rules, keep_session=False) as page:
+            page.goto("about:blank")
+            assert page.evaluate("navigator.webdriver") is None

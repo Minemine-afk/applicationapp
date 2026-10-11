@@ -185,6 +185,7 @@ apply:
   delay_seconds: [45, 120]            # random wait between submissions
   max_failures_per_hour: 2            # more than this pauses submissions
   browser_profile: ./data/browser-profile   # keeps your MCF login between runs
+  browser_channel: chrome             # use the PC's real Google Chrome (bot checks trust it more); "" = bundled
   headless: false                     # `mcf-apply run` is headless regardless
   screenshots_dir: ./data/screenshots
 

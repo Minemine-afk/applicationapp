@@ -77,6 +77,10 @@ class Apply(_Strict):
     max_failures_per_hour: int = Field(2, ge=1)
     browser_profile: Path = Path("./data/browser-profile")
     browser_executable: Path | None = None
+    # Prefer the real Google Chrome installed on the PC ("chrome"; "msedge" also works) over
+    # Playwright's bundled Chromium: sites' bot checks (reCAPTCHA, Cloudflare) trust it far more.
+    # Falls back to the bundled browser if it isn't installed. "" disables.
+    browser_channel: str = "chrome"
     headless: bool = False
     screenshots_dir: Path = Path("./data/screenshots")
 
