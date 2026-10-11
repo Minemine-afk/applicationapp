@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections import Counter
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from html import escape
 
-from mcf_autoapply.config import Config
+from mcf_autoapply.config import Config, get_env
 from mcf_autoapply.db import STATUS_NEW, Database
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
@@ -41,7 +40,7 @@ class Notifier:
 
     @classmethod
     def from_config(cls, cfg: Config, db: Database, **kwargs) -> Notifier:
-        token = os.environ.get(cfg.telegram.token_env)
+        token = get_env(cfg.telegram.token_env)
         if not (cfg.telegram.enabled and token):
             return cls(cfg, db, None, None)
         stored = db.get_state(CHAT_ID_KEY)

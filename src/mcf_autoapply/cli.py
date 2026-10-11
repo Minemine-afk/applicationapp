@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Annotated, Optional
@@ -12,7 +11,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from mcf_autoapply.config import Config, load_config
+from mcf_autoapply.config import Config, get_env, load_config
 from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Database
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.models import Job
@@ -367,10 +366,11 @@ def serve_cmd(config: ConfigOpt = None) -> None:
 def telegram_setup_cmd(config: ConfigOpt = None) -> None:
     """Link your Telegram chat: send your bot any message first, then run this."""
     cfg, db = _load(config)
-    token = os.environ.get(cfg.telegram.token_env)
+    token = get_env(cfg.telegram.token_env)
     if not token:
         console.print(f"[red]Set {cfg.telegram.token_env} to your bot token first "
-                      "(create a bot with @BotFather).[/red]")
+                      "(create a bot with @BotFather). On Windows: "
+                      f'setx {cfg.telegram.token_env} "<token>"[/red]')
         raise typer.Exit(1)
     api = TelegramAPI(token)
     try:

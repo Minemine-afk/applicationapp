@@ -33,20 +33,17 @@ from this folder as `.venv\Scripts\mcf-apply ...`.
 ## 3. Connect Telegram
 
 1. In Telegram, message **@BotFather**, send `/newbot`, and copy the token it gives you.
-2. Save the token for your Windows user. It's stored outside the project, so it never reaches GitHub:
+2. Save the token for your Windows user. It's stored outside the project, so it never reaches GitHub,
+   and mcf-apply finds it even in the window you're in:
    ```powershell
    setx TELEGRAM_BOT_TOKEN "123456789:ABCdef..."
    ```
-3. **Close PowerShell and open a new one** (setx only applies to new windows), then:
-   ```powershell
-   cd $HOME\applicationapp
-   ```
-4. Send your new bot any message in Telegram, then run:
+3. Send your new bot any message in Telegram, then run:
    ```powershell
    .venv\Scripts\mcf-apply telegram-setup
    ```
    You should get "✅ Linked to mcf-apply" in Telegram.
-5. Open the config with `notepad config.yml`, change `enabled: false` under `telegram:` to
+4. Open the config with `notepad config.yml`, change `enabled: false` under `telegram:` to
    `enabled: true`, and save.
 
 ## 4. Log in to MyCareersFuture

@@ -233,3 +233,11 @@ def test_answer_bank_keeps_non_ascii_text(tmp_path):
     assert "“on-call”" in raw
     assert AnswerBank(tmp_path / "answers.yml").lookup(
         "Are you comfortable with “on-call” rotations — including weekends?") == "yes"
+
+
+def test_get_env_prefers_process_env_and_handles_missing(monkeypatch):
+    from mcf_autoapply.config import get_env
+    monkeypatch.setenv("MCF_TEST_TOKEN", "abc")
+    assert get_env("MCF_TEST_TOKEN") == "abc"
+    monkeypatch.delenv("MCF_TEST_TOKEN")
+    assert get_env("MCF_TEST_TOKEN") is None

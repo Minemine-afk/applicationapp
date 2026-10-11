@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import time
 from pathlib import Path
 from typing import Literal
@@ -111,6 +112,25 @@ class Config(_Strict):
     telegram: Telegram = Field(default_factory=Telegram)
     serve: Serve = Field(default_factory=Serve)
     discovery: Discovery = Field(default_factory=Discovery)
+
+
+def get_env(name: str) -> str | None:
+    """An environment variable, or on Windows the value `setx` saved for your user.
+
+    `setx` only reaches windows opened afterwards, so read the saved value directly too.
+    """
+    if value := os.environ.get(name):
+        return value
+    if sys.platform == "win32":
+        import winreg
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+                value, _ = winreg.QueryValueEx(key, name)
+                return str(value) or None
+        except OSError:
+            return None
+    return None
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:
