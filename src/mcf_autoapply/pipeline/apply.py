@@ -15,6 +15,7 @@ from mcf_autoapply.mcf.applier import CAPTCHA, LOGGED_OUT, Applier, Outcome
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.pacer import Pacer
+from mcf_autoapply.sources import source_of
 
 DRY_RUN_DELAY_S = (3, 8)
 
@@ -30,21 +31,28 @@ class RunResult:
 def pending(db: Database, dry_run: bool, limit: int | None = None) -> list:
     """Approved jobs to process, best score first. Live runs also take dry-run passes."""
     states = [Q.APPROVED, Q.FAILED] + ([] if dry_run else [Q.DRY_RUN_OK])
-    applied = db.applied_on_mcf_uuids()
+    applied = db.applied_on_site_uuids()
     rows = [r for r in db.applications(states)
             if (r["state"] != Q.FAILED or r["attempts"] < Q.MAX_ATTEMPTS)
             and r["job_uuid"] not in applied]
     return rows[:limit] if limit else rows
 
 
+def site_caps(cfg: Config) -> dict[str, tuple[int, int]]:
+    return {"jobstreet": (cfg.jobstreet.hourly_cap, cfg.jobstreet.daily_cap)}
+
+
 def run(
-    cfg: Config, db: Database, applier_factory: Callable[[], Applier], dry_run: bool,
+    cfg: Config, db: Database, applier_factory: Callable[..., Applier], dry_run: bool,
     limit: int | None = None, sleep: Callable[[float], None] = time.sleep,
     pacer: Pacer | None = None, on_outcome: Callable[[str, Outcome], None] | None = None,
 ) -> RunResult:
+    """Apply to the queue. `applier_factory(source)` gives the applier for a site (older
+    factories take no argument). A site that logs us out or hits its cap is skipped for the
+    rest of the run while the other continues."""
     if cfg.apply.mode == "dry_run":
         dry_run = True   # live submission needs apply.mode set to manual or auto
-    pacer = pacer or Pacer(cfg.apply, db)
+    pacer = pacer or Pacer(cfg.apply, db, site_caps=site_caps(cfg))
     result = RunResult(dry_run)
     Q.refresh_answers(db, AnswerBank(cfg.apply.answers_path))
 
@@ -56,27 +64,48 @@ def run(
     if not jobs:
         return result
 
-    applier = applier_factory()
-    for i, app in enumerate(jobs):
-        if i:
+    appliers: dict[str, Applier] = {}
+    stopped_sites: dict[str, str] = {}
+    first = True
+    for app in jobs:
+        source = source_of(app["job_uuid"])
+        if source in stopped_sites:
+            continue
+        if not dry_run and (reason := pacer.blocked_reason(source)):
+            if reason.startswith(source):   # this site's own cap: skip just this site
+                stopped_sites[source] = reason
+                continue
+            result.stopped = reason
+            break
+        if not first:
             sleep(random.uniform(*DRY_RUN_DELAY_S) if dry_run else pacer.delay_seconds())
-            if not dry_run and (reason := pacer.blocked_reason()):
-                result.stopped = reason
-                break
+        first = False
+        if source not in appliers:
+            try:
+                appliers[source] = applier_factory(source)
+            except TypeError:
+                appliers[source] = applier_factory()
 
-        outcome = applier.apply(app["job_uuid"], app["url"],
-                                json.loads(app["questions"]), json.loads(app["answers"]))
+        outcome = appliers[source].apply(app["job_uuid"], app["url"],
+                                         json.loads(app["questions"]), json.loads(app["answers"]))
         result.outcomes.append((app["title"], outcome))
         if on_outcome:
             on_outcome(app["title"], outcome)
 
         if outcome.state == LOGGED_OUT:
-            result.stopped = outcome.detail
-            break
+            stopped_sites[source] = outcome.detail
+            continue
         if outcome.state == CAPTCHA:
             pacer.pause(f"CAPTCHA seen while applying to '{app['title']}'")
-            result.stopped = "paused: CAPTCHA (log in and check MCF, then `mcf-apply unpause`)"
+            result.stopped = "paused: CAPTCHA (log in and check the site, then /resume)"
             break
+        if outcome.state == Q.NEEDS_INPUT:
+            questions = [q["question"] for q in outcome.questions or []]
+            db.update_application(app["job_uuid"], state=Q.NEEDS_INPUT, questions=questions,
+                                  answers=[None] * len(questions), screenshot=outcome.screenshot,
+                                  error=None)
+            db.commit()
+            continue
 
         # Login and CAPTCHA stops above aren't the job's fault, so only these count as attempts.
         fields: dict = {"state": outcome.state, "error": None, "screenshot": outcome.screenshot,
@@ -88,7 +117,7 @@ def run(
             fields["mcf_application_id"] = outcome.application_id
         if outcome.state in (Q.APPLIED, Q.ALREADY_APPLIED):
             # Remember it the way the MCF sync does, so reposts are skipped too.
-            db.upsert_applied_on_mcf(app["job_uuid"], app["title"], app["company_name"],
+            db.upsert_applied_on_site(app["job_uuid"], app["title"], app["company_name"],
                                      mcf_application_id=outcome.application_id)
         db.update_application(app["job_uuid"], **fields)
         db.commit()
@@ -96,4 +125,6 @@ def run(
         if outcome.state == Q.FAILED and not dry_run and pacer.record_failure():
             result.stopped = "paused: too many failures in the last hour"
             break
+    if stopped_sites and not result.stopped:
+        result.stopped = "; ".join(stopped_sites.values())
     return result

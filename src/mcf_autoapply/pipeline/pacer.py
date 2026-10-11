@@ -18,13 +18,17 @@ RAMP_START_KEY = "ramp_start"
 
 
 class Pacer:
+    """Global caps from `rules`, plus optional per-site caps ({site: (hourly, daily)})."""
+
     def __init__(
         self, rules: Apply, db: Database, now: Callable[[], datetime] | None = None,
+        site_caps: dict[str, tuple[int, int]] | None = None,
     ) -> None:
         self.rules = rules
         self.db = db
         self.tz = ZoneInfo(rules.timezone)
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self.site_caps = site_caps or {}
 
     def now(self) -> datetime:
         return self._now().astimezone(self.tz)
@@ -38,19 +42,24 @@ class Pacer:
         weeks = 0 if start is None else max(0, (self.now() - start).days // 7)
         return min(self.rules.ramp[min(weeks, len(self.rules.ramp) - 1)], self.rules.daily_cap)
 
-    def applied_today(self) -> int:
+    def applied_today(self, source: str | None = None) -> int:
         midnight = self.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        return self.db.count_events(APPLIED_EVENT, midnight)
+        return self.db.count_events(APPLIED_EVENT, midnight, source)
 
-    def applied_last_hour(self) -> int:
-        return self.db.count_events(APPLIED_EVENT, self.now() - timedelta(hours=1))
+    def applied_last_hour(self, source: str | None = None) -> int:
+        return self.db.count_events(APPLIED_EVENT, self.now() - timedelta(hours=1), source)
 
-    def remaining(self) -> int:
-        """How many more submissions are allowed right now."""
-        return max(0, min(self.daily_cap() - self.applied_today(),
-                          self.rules.hourly_cap - self.applied_last_hour()))
+    def remaining(self, source: str | None = None) -> int:
+        """How many more submissions are allowed right now (for one site, if given)."""
+        left = min(self.daily_cap() - self.applied_today(),
+                   self.rules.hourly_cap - self.applied_last_hour())
+        if source in self.site_caps:
+            hourly, daily = self.site_caps[source]
+            left = min(left, daily - self.applied_today(source),
+                       hourly - self.applied_last_hour(source))
+        return max(0, left)
 
-    def blocked_reason(self) -> str | None:
+    def blocked_reason(self, source: str | None = None) -> str | None:
         """Why no submission may happen right now, or None if one may."""
         if paused := self.paused():
             return f"paused: {paused['reason']} (run `mcf-apply unpause` once resolved)"
@@ -61,6 +70,12 @@ class Pacer:
             return f"daily cap reached ({self.daily_cap()})"
         if self.applied_last_hour() >= self.rules.hourly_cap:
             return f"hourly cap reached ({self.rules.hourly_cap})"
+        if source in self.site_caps:
+            hourly, daily = self.site_caps[source]
+            if self.applied_today(source) >= daily:
+                return f"{source} daily cap reached ({daily})"
+            if self.applied_last_hour(source) >= hourly:
+                return f"{source} hourly cap reached ({hourly})"
         return None
 
     def delay_seconds(self) -> float:

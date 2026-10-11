@@ -16,7 +16,7 @@ from mcf_autoapply.overrides import apply_overrides
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import discover
-from mcf_autoapply.sources import short_id
+from mcf_autoapply.sources import short_id, source_of
 
 Log = Callable[[str], None]   # receives rich markup
 
@@ -35,6 +35,7 @@ def styled_state(state: str) -> str:
 def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
                 headless: bool | None, log: Log):
     """Apply to queued jobs in a browser. Returns the RunResult, or None if nothing queued."""
+    from mcf_autoapply.jobstreet.applier import JobStreetApplier
     from mcf_autoapply.mcf.applier import Applier
     from mcf_autoapply.mcf.browser import open_page
     from mcf_autoapply.pipeline import apply as A
@@ -48,21 +49,29 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
         log("Nothing queued. Approve jobs with `mcf-apply approve <ID>`"
             + (" or let auto mode pick them." if cfg.apply.mode == "auto" else "."))
         return None
+    sites = {source_of(j["job_uuid"]) for j in jobs}
+    if "jobstreet" in sites and not cfg.jobstreet.headless:
+        headless = False   # JobStreet's bot check wants a visible browser
 
     def show(title, outcome):
         log(f"{styled_state(outcome.state)} {title}  [dim]{outcome.detail}[/dim]")
 
     log(f"{'Submitting' if live else 'Dry run (no submissions)'}: up to {len(jobs)} job(s)…")
     with open_page(cfg.apply, headless=headless) as page:
-        skipped = sync_applied_jobs(page, db, log)
+        skipped = []
+        for site in sorted(sites):
+            skipped += sync_applied_jobs(page, db, log, site)
         if skipped:
-            log(f"Skipped {len(skipped)} queued job(s) MCF already lists as applied: "
+            log(f"Skipped {len(skipped)} queued job(s) already listed as applied: "
                 + "; ".join(skipped[:5]))
-        result = A.run(
-            cfg, db,
-            lambda: Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live),
-            dry_run=not live, limit=limit, on_outcome=show,
-        )
+
+        def applier_for(source: str):
+            if source == "jobstreet":
+                return JobStreetApplier(page, cfg.apply.screenshots_dir,
+                                        cfg.jobstreet.resume_name, not live)
+            return Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live)
+
+        result = A.run(cfg, db, applier_for, dry_run=not live, limit=limit, on_outcome=show)
     result.skipped_applied = skipped
     if result.stopped:
         log(f"[yellow]Stopped: {result.stopped}[/yellow]")
@@ -101,19 +110,25 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
                          sum(d.state == Q.APPROVED for d in decisions))
 
 
-def sync_applied_jobs(page, db: Database, log: Log) -> list[str]:
-    """Refresh MCF's Applied Jobs list before applying; a failure here never blocks a run."""
-    from mcf_autoapply.mcf.applied import AppliedSyncError, sync_applied
+def sync_applied_jobs(page, db: Database, log: Log, site: str = "mcf") -> list[str]:
+    """Refresh a site's applied-jobs list before applying; a failure never blocks a run."""
+    from mcf_autoapply.mcf.applied import AppliedSyncError
+    from mcf_autoapply.sources import LABELS
 
+    if site == "jobstreet":
+        from mcf_autoapply.jobstreet.session import sync_applied
+    else:
+        from mcf_autoapply.mcf.applied import sync_applied
+    name = LABELS.get(site, site)
     try:
         result = sync_applied(page, db)
     except AppliedSyncError as e:
-        log(f"[yellow]Couldn't read MCF's Applied Jobs ({e}); using what's known.[/yellow]")
+        log(f"[yellow]Couldn't read {name}'s applied jobs ({e}); using what's known.[/yellow]")
         return []
     except Exception as e:
-        log(f"[yellow]Applied Jobs sync failed: {type(e).__name__}: {e}[/yellow]")
+        log(f"[yellow]{name} applied-jobs sync failed: {type(e).__name__}: {e}[/yellow]")
         return []
-    log(f"MCF lists {result.total} application(s); {result.new} new to us.")
+    log(f"{name} lists {result.total} application(s); {result.new} new to us.")
     return result.released
 
 
@@ -126,9 +141,12 @@ def apply_only(cfg: Config, db: Database, notifier: Notifier, log: Log,
 
 
 def login(cfg: Config, log: Log, notifier: Notifier | None = None,
-          headless: bool | None = None) -> bool:
-    """Open the Singpass QR login. Each QR goes to Telegram (if linked) and stays on screen."""
+          headless: bool | None = None, site: str = "mcf") -> bool:
+    """Log in to a site. MCF: Singpass QR to Telegram. JobStreet: you sign in in a window."""
     from mcf_autoapply.mcf.browser import is_logged_in, login_via_qr, open_page, save_session
+
+    if site == "jobstreet":
+        return login_jobstreet(cfg, log, notifier)
 
     def on_qr(qr, n):
         if notifier and notifier.send_login_qr(qr, n):
@@ -173,6 +191,30 @@ def login(cfg: Config, log: Log, notifier: Notifier | None = None,
     else:
         tell("⚠️ Logged in, but the login did not survive reopening the browser. "
              "Runs will report logged_out. Please tell the developer.")
+    return True
+
+
+def login_jobstreet(cfg: Config, log: Log, notifier: Notifier | None = None) -> bool:
+    """Open JobStreet's sign-in in a visible window; you log in; the session is saved."""
+    from mcf_autoapply.jobstreet import session as JS
+    from mcf_autoapply.mcf.browser import open_page, save_session
+
+    def tell(text: str) -> None:
+        log(text)
+        if notifier:
+            notifier._send(text)
+
+    with open_page(cfg.apply, headless=False) as page:
+        ok = JS.login(page, tell)
+        if ok:
+            save_session(page.context, cfg.apply)
+    if not ok:
+        return False
+    with open_page(cfg.apply, headless=True) as page:
+        persisted = JS.check_logged_in(page)
+    tell("💾 JobStreet login saved: it survives reopening the browser." if persisted else
+         "⚠️ Logged in to JobStreet, but the login did not survive reopening the browser. "
+         "Please tell the developer.")
     return True
 
 
@@ -311,17 +353,24 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
                 log(f"[red]Apply failed: {e}[/red]\n{traceback.format_exc()}")
                 wn.alert("run_error", f"Applying failed: {type(e).__name__}: {e}")
 
+    login_site = {"site": "mcf"}
+
     def login_task() -> None:
+        site = login_site["site"]
         with worker_notifier() as (wdb, wn):
-            wn._send("Opening the Singpass login. The QR code will arrive here in a few "
-                     "seconds. Tap it within a minute.")
+            if site == "jobstreet":
+                wn._send("Opening JobStreet's sign-in in a browser window on the PC. "
+                         "Sign in there; nothing is typed for you.")
+            else:
+                wn._send("Opening the Singpass login. The QR code will arrive here in a few "
+                         "seconds. Tap it within a minute.")
             try:
-                ok = (do_login or (lambda: login(cfg, log, wn)))()
+                ok = (do_login or (lambda: login(cfg, log, wn, site=site)))()
             except Exception as e:   # e.g. no display available
                 wn._send(f"Login failed: {e}")
                 return
             wn._send("✅ Logged in. Starting a run." if ok else
-                     "Didn't detect a login within 10 minutes. Send /login to try again.")
+                     f"Didn't detect a login within 10 minutes. Send /login{' jobstreet' if site == 'jobstreet' else ''} to try again.")
         if ok:
             tasks.submit("run")
 
@@ -340,6 +389,16 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
                 "already": "Applying is already in progress or queued."}[tasks.submit("apply")]
 
     def login_cmd(args: str) -> str | None:
+        site = args.strip().lower() or "mcf"
+        if site in ("js", "jobstreet"):
+            site = "jobstreet"
+        elif site not in ("mcf", "mycareersfuture"):
+            return "Use /login (MyCareersFuture) or /login jobstreet."
+        else:
+            site = "mcf"
+        if site == "jobstreet" and not cfg.jobstreet.enabled:
+            return "JobStreet is off: set jobstreet.enabled: true in config.yml first."
+        login_site["site"] = site
         busy = ACTIVITY.get(tasks.current, "the current task")
         return {"started": None,   # the login task sends its own messages
                 "queued": f"The login will start as soon as {busy} finishes; it's next in line.",

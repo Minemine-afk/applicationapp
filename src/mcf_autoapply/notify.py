@@ -113,7 +113,7 @@ class Notifier:
         t, a = self.cfg.telegram, self.cfg.apply
         upper = a.auto_apply_min_score if a.mode == "auto" and not any_score else 101
         out = []
-        applied_uuids, applied_keys = self.db.applied_on_mcf_uuids(), self.db.applied_on_mcf_keys()
+        applied_uuids, applied_keys = self.db.applied_on_site_uuids(), self.db.applied_on_site_keys()
         for job in self.db.jobs([STATUS_NEW], sort="score"):
             if job["score"] is None or job["score"] < t.quick_review_min_score:
                 break
@@ -345,7 +345,8 @@ class Notifier:
 
     def help_text(self, handlers: dict | None = None) -> str:
         handlers = handlers or self._handlers
-        extra = {"login": "Log in to MCF with Singpass", "run": "Search and apply now",
+        extra = {"login": "Log in to MCF with Singpass (/login jobstreet for JobStreet)",
+                 "run": "Search and apply now",
                  "apply": "Apply to the queue now, without searching"}
         lines = ["<b>Commands</b>"]
         lines += [f"/{n} — {d}" for n, d in extra.items() if f"/{n}" in handlers]
@@ -428,8 +429,8 @@ class Notifier:
                   (Q.DRY_RUN_OK, "🧪 Dry run passed"), (Q.FAILED, "❌ Failed"),
                   (Q.APPLIED, "✅ Applied (latest)")]
         lines = []
-        if n := self.db.applied_on_mcf_count():
-            lines.append(f"📋 MCF lists <b>{n}</b> applications of yours; those jobs are skipped.")
+        if n := self.db.applied_on_site_count():
+            lines.append(f"📋 The sites list <b>{n}</b> applications of yours; those jobs are skipped.")
         for state, label in groups:
             rows = self.db.applications([state], limit=5)
             if not rows:

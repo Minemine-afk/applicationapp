@@ -117,8 +117,8 @@ def sync_applied(page: Page, db: Database) -> SyncResult:
     applied = fetch_applied_jobs(page)
     result = SyncResult(total=len(applied))
     for a in applied:
-        if db.upsert_applied_on_mcf(a.uuid, a.title, a.employer, a.status, a.submitted_on,
-                                    a.application_id):
+        if db.upsert_applied_on_site(a.uuid, a.title, a.employer, a.status, a.submitted_on,
+                                     a.application_id, source="mcf"):
             result.new += 1
     result.released = mark_already_applied(db)
     db.log(None, "applied_sync", {"total": result.total, "new": result.new,
@@ -130,7 +130,7 @@ def sync_applied(page: Page, db: Database) -> SyncResult:
 def mark_already_applied(db: Database) -> list[str]:
     """Move queued/approved jobs that MCF lists as applied (by uuid or as a repost) to
     already_applied. Returns their titles."""
-    uuids, keys = db.applied_on_mcf_uuids(), db.applied_on_mcf_keys()
+    uuids, keys = db.applied_on_site_uuids(), db.applied_on_site_keys()
     moved = []
     for app in db.applications([Q.APPROVED, Q.NEEDS_INPUT, Q.DRY_RUN_OK, Q.FAILED]):
         if app["job_uuid"] in uuids or applied_key(app["company_name"], app["title"]) in keys:
@@ -142,5 +142,5 @@ def mark_already_applied(db: Database) -> list[str]:
 
 def is_already_applied(db: Database, job) -> bool:
     """True if MCF lists this job (or the same title at the same employer) as applied."""
-    return (job["uuid"] in db.applied_on_mcf_uuids()
-            or applied_key(job["company_name"], job["title"]) in db.applied_on_mcf_keys())
+    return (job["uuid"] in db.applied_on_site_uuids()
+            or applied_key(job["company_name"], job["title"]) in db.applied_on_site_keys())

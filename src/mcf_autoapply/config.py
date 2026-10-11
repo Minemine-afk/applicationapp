@@ -106,6 +106,9 @@ class JobStreet(_Strict):
     daily_cap: int = Field(8, ge=1)
     allow_auto: bool = False          # never auto-approve JobStreet jobs until this is true
     resume_name: str = ""             # part of the saved-resume name on JobStreet; "" = first
+    # JobStreet's bot check passes far more often in a visible browser than a hidden one, so
+    # runs that include JobStreet jobs open a window on the PC unless this is true.
+    headless: bool = False
 
 
 class Serve(_Strict):

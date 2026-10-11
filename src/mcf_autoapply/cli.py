@@ -310,14 +310,15 @@ def login_cmd(
     config: ConfigOpt = None,
     headless: Annotated[bool, typer.Option("--headless/--show-browser",
                                            help="Hide the browser (QR only via Telegram)")] = False,
+    site: Annotated[str, typer.Option(help="mcf or jobstreet")] = "mcf",
 ) -> None:
-    """Log in to MCF with Singpass. The QR code is sent to Telegram if it's linked."""
+    """Log in to a site. MCF: Singpass QR (also sent to Telegram). JobStreet: a window opens."""
     cfg, db = _load(config)
     notifier = Notifier.from_config(cfg, db)
     if headless and not notifier.enabled:
         console.print("[red]--headless needs Telegram linked, or you'd have no QR to scan.[/red]")
         raise typer.Exit(1)
-    ok = R.login(cfg, _log, notifier, headless=headless)
+    ok = R.login(cfg, _log, notifier, headless=headless, site=site)
     if ok:
         notifier._send("✅ Logged in to MyCareersFuture.")
         console.print("[green]Logged in. The session is saved for future runs.[/green]")

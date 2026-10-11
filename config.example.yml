@@ -213,6 +213,7 @@ jobstreet:
   daily_cap: 8
   allow_auto: false                   # true = auto mode may also approve JobStreet jobs
   resume_name: ""                     # part of a saved resume's name on JobStreet; "" = first
+  headless: false                     # false = a browser window shows while applying on JobStreet
 
 serve:
   # `mcf-apply serve` keeps running on a home machine: a full run every interval,

@@ -1,0 +1,273 @@
+"""Fill and submit one JobStreet (SEEK) application in a logged-in browser page.
+
+Same contract as mcf.applier.Applier. Differences: employer questions are only discovered
+inside the form, so a job whose questions aren't all answered in answers.yml comes back as
+NEEDS_INPUT carrying the questions (the run parks it and Telegram asks you); "Apply" that leads
+to the employer's own site is never followed (EXTERNAL); Cloudflare's interstitial that doesn't
+clear counts as CAPTCHA, which pauses submissions.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from datetime import datetime
+from pathlib import Path
+
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import Locator, Page
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+from mcf_autoapply.jobstreet import selectors as S
+from mcf_autoapply.mcf.applier import CAPTCHA, LOGGED_OUT, Outcome
+from mcf_autoapply.pipeline import queue as Q
+from mcf_autoapply.pipeline.answers import normalise
+
+MAX_STEPS = 8
+STEP_TIMEOUT_MS = 30_000
+
+
+class JobStreetApplier:
+    def __init__(self, page: Page, screenshots_dir: Path, resume_name: str = "",
+                 dry_run: bool = True, step_timeout_ms: int = STEP_TIMEOUT_MS,
+                 cloudflare_wait_s: float = S.CLOUDFLARE_CLEAR_S) -> None:
+        self.page = page
+        self.shots = Path(screenshots_dir)
+        self.resume_name = resume_name.strip()
+        self.dry_run = dry_run
+        self.timeout = step_timeout_ms
+        self.cloudflare_wait_s = cloudflare_wait_s
+
+    def apply(self, uuid: str, url: str, questions: list[str],
+              answers: list[str | None]) -> Outcome:
+        self._uuid = uuid
+        self.bank = {normalise(q): a for q, a in zip(questions, answers) if a is not None}
+        try:
+            return self._apply(url)
+        except (PlaywrightTimeout, PlaywrightError) as e:
+            return self._fail(f"browser: {str(e).splitlines()[0][:200]}")
+
+    # --- flow -----------------------------------------------------------------------------
+
+    def _apply(self, url: str) -> Outcome:
+        page = self.page
+        page.goto(url, wait_until="domcontentloaded")
+        if not self._clear_cloudflare():
+            return Outcome(CAPTCHA, "JobStreet's bot check didn't clear", self._screenshot("cloudflare"))
+        page.locator(f"{S.APPLY_BUTTON}, {S.SIGN_IN_LINK}, main h1, h1").first.wait_for(
+            timeout=self.timeout)
+        self._settle()
+        body = page.locator("body").inner_text()
+        if any(m.lower() in body.lower() for m in S.APPLIED_MARKERS):
+            return Outcome(Q.ALREADY_APPLIED, "JobStreet shows this job as applied")
+        if any(m.lower() in body.lower() for m in S.CLOSED_MARKERS):
+            return Outcome(Q.CLOSED, "no longer advertised")
+        button = page.locator(S.APPLY_BUTTON)
+        if not button.count():
+            if self._logged_out():
+                return Outcome(LOGGED_OUT, "JobStreet session expired; send /login jobstreet")
+            return Outcome(Q.CLOSED, "no apply button on the job page")
+        label = button.first.inner_text().strip()
+        if S.QUICK_APPLY_TEXT.lower() not in label.lower():
+            return Outcome(Q.EXTERNAL, f"'{label}' leads to the employer's own site")
+        button.first.click()
+        page.wait_for_load_state("domcontentloaded")
+        if not self._clear_cloudflare():
+            return Outcome(CAPTCHA, "JobStreet's bot check didn't clear", self._screenshot("cloudflare"))
+        if self._logged_out():
+            return Outcome(LOGGED_OUT, "JobStreet session expired; send /login jobstreet")
+
+        for _ in range(MAX_STEPS):
+            self._settle()
+            if self._success():
+                return Outcome(Q.APPLIED, "submitted", self._screenshot("submitted"))
+            if self._logged_out():
+                return Outcome(LOGGED_OUT, "JobStreet session expired; send /login jobstreet")
+            heading = self._heading().lower()
+            # Steps are recognised by their controls, not their titles (SEEK calls the resume
+            # step "Choose documents", for instance).
+            if page.locator(S.SUBMIT_BUTTON).count():
+                return self._review()
+            if self._question_groups():
+                outcome = self._answer_questions()
+                if outcome:
+                    return outcome
+            elif page.locator(f"{S.RESUME_SELECT}, {S.SAVED_RESUME_RADIO}").count():
+                self._choose_resume()
+            # profile step and anything unrecognised: just continue
+            before = page.url, heading
+            self._continue().click()
+            if not self._changed(before):
+                errors = [t for t in S.FIELD_ERRORS if page.get_by_text(t).count()]
+                why = (f"JobStreet wants more on the '{heading or 'current'}' step" if errors
+                       else f"the '{heading or 'current'}' step did not move on")
+                return self._fail(f"{why}; finish this one by hand")
+        return self._fail(f"did not reach the review page in {MAX_STEPS} steps")
+
+    def _review(self) -> Outcome:
+        shot = self._screenshot("review")
+        if self.dry_run:
+            return Outcome(Q.DRY_RUN_OK, "stopped at the review page (dry run)", shot)
+        self.page.locator(S.SUBMIT_BUTTON).first.click()
+        deadline = time.monotonic() + self.timeout / 1000
+        while time.monotonic() < deadline:
+            if self._success():
+                return Outcome(Q.APPLIED, "submitted", self._screenshot("submitted"))
+            self.page.wait_for_timeout(500)
+        return self._fail("no confirmation after Submit; check JobStreet before retrying")
+
+    # --- steps ----------------------------------------------------------------------------
+
+    def _choose_resume(self) -> None:
+        page = self.page
+        radio = page.locator(S.SAVED_RESUME_RADIO)
+        if radio.count():
+            radio.first.click()
+        select = page.locator(S.RESUME_SELECT)
+        if select.count():
+            options = select.first.locator("option").all_inner_texts()
+            wanted = next((o for o in options if self.resume_name and
+                           self.resume_name.lower() in o.lower()), None)
+            if wanted:
+                select.first.select_option(label=wanted)
+            elif len(options) > 1 and not select.first.input_value():
+                select.first.select_option(index=1)   # first real resume
+        none = page.locator(S.COVER_LETTER_NONE)
+        if none.count():
+            none.first.click()
+
+    def _question_groups(self) -> list[Locator]:
+        groups = self.page.locator(S.QUESTION_GROUPS)
+        return [groups.nth(i) for i in range(groups.count())
+                if groups.nth(i).locator("input, select, textarea").count()]
+
+    def _answer_questions(self) -> Outcome | None:
+        """Answer every employer question from the bank; else NEEDS_INPUT with the questions."""
+        found: list[dict] = []
+        missing: list[dict] = []
+        for group in self._question_groups():
+            text = self._question_text(group)
+            if not text:
+                continue
+            options = [o.strip() for o in group.locator("label").all_inner_texts()
+                       if o.strip() and normalise(o) != normalise(text)]
+            q = {"question": text, "options": options}
+            found.append(q)
+            answer = self._lookup(text)
+            if answer is None or not self._fill(group, answer, options):
+                missing.append(q)
+        if missing:
+            return Outcome(Q.NEEDS_INPUT, f"{len(missing)} employer question(s) need your answer",
+                           self._screenshot("questions"), questions=found)
+        return None
+
+    def _question_text(self, group: Locator) -> str:
+        for sel in ("legend", "label", "p", "span"):
+            loc = group.locator(sel)
+            if loc.count():
+                text = loc.first.inner_text().strip()
+                if text:
+                    return text
+        return ""
+
+    def _lookup(self, question: str) -> str | None:
+        key = normalise(question)
+        if key in self.bank:
+            return self.bank[key]
+        for k, v in self.bank.items():   # the form may add a suffix like " *"
+            if k and (k in key or key in k):
+                return v
+        return None
+
+    def _fill(self, group: Locator, answer: str, options: list[str]) -> bool:
+        """Click the option matching the answer, or type it. False if it can't be applied."""
+        wanted = normalise(answer)
+        radios = group.locator('input[type="radio"], input[type="checkbox"]')
+        if radios.count():
+            for i, label in enumerate(options[:radios.count()]):
+                if normalise(label) == wanted or wanted in normalise(label):
+                    radios.nth(i).check()
+                    return True
+            return False
+        select = group.locator("select")
+        if select.count():
+            for opt in select.first.locator("option").all_inner_texts():
+                if normalise(opt) == wanted or wanted in normalise(opt):
+                    select.first.select_option(label=opt)
+                    return True
+            return False
+        text = group.locator("textarea, input[type='text'], input[type='number']")
+        if text.count():
+            text.first.fill(answer)
+            return True
+        return False
+
+    # --- page state -----------------------------------------------------------------------
+
+    def _clear_cloudflare(self) -> bool:
+        deadline = time.monotonic() + self.cloudflare_wait_s
+        while S.CLOUDFLARE_TITLE.lower() in (self.page.title() or "").lower():
+            if time.monotonic() > deadline:
+                return False
+            self.page.wait_for_timeout(1000)
+        return True
+
+    def _settle(self) -> None:
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=5_000)
+        except PlaywrightTimeout:
+            pass
+
+    def _logged_out(self) -> bool:
+        page = self.page
+        if "/login" in page.url or "login." in page.url:
+            return True
+        return bool(page.get_by_role("link", name=re.compile(S.SIGN_IN_TEXT, re.I)).count())
+
+    def _success(self) -> bool:
+        if S.SUCCESS_URL_PART in self.page.url:
+            return True
+        return any(self.page.get_by_text(t, exact=False).count() for t in S.SUCCESS_TEXTS)
+
+    def _heading(self) -> str:
+        loc = self.page.locator(S.STEP_HEADING)
+        return loc.first.inner_text().strip() if loc.count() else ""
+
+    def _continue(self) -> Locator:
+        return self.page.locator(S.CONTINUE_BUTTON).first
+
+    def _changed(self, before: tuple[str, str]) -> bool:
+        deadline = time.monotonic() + self.timeout / 1000
+        error_seen = 0
+        while time.monotonic() < deadline:
+            self.page.wait_for_timeout(250)
+            if (self.page.url, self._heading().lower()) != before or self._success():
+                return True
+            if self.page.locator(S.SUBMIT_BUTTON).count():
+                return True
+            if any(self.page.get_by_text(t).count() for t in S.FIELD_ERRORS):
+                error_seen += 250
+                if error_seen >= 1000:
+                    return False
+        return False
+
+    # --- evidence -------------------------------------------------------------------------
+
+    def _screenshot(self, label: str) -> str | None:
+        try:
+            self.shots.mkdir(parents=True, exist_ok=True)
+            stem = f"{datetime.now():%Y%m%d-%H%M%S}-{self._uuid.replace(':', '-')}-{label}"
+            path = self.shots / f"{stem}.png"
+            self.page.screenshot(path=str(path), full_page=True)
+            return str(path)
+        except PlaywrightError:
+            return None
+
+    def _fail(self, detail: str) -> Outcome:
+        shot = self._screenshot("failed")
+        if shot:
+            try:
+                Path(shot).with_suffix(".html").write_text(self.page.content(), encoding="utf-8")
+            except PlaywrightError:
+                pass
+        return Outcome(Q.FAILED, detail, shot)

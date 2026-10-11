@@ -1,0 +1,94 @@
+<!doctype html>
+<!-- A stand-in for JobStreet's (SEEK's) job page and apply flow, using the hooks listed in
+     src/mcf_autoapply/jobstreet/selectors.py. Variant from the URL:
+     /job/<variant>?q=<number of employer questions>. -->
+<html>
+<head><meta charset="utf-8"><title>Fake JobStreet</title></head>
+<body>
+<header><a href="/my-activity/applied-jobs" data-automation="profile-menu">My activity</a></header>
+<main id="app"></main>
+<script>
+const QUESTIONS = [
+  {q: "Do you have a degree in Computer Science or a related field?", opts: ["Yes", "No"]},
+  {q: "Which of the following best describes your experience with Python?", opts: ["None", "Less than 1 year", "1-2 years", "3+ years"]},
+  {q: "What is your expected monthly salary?", opts: []},
+];
+const params = new URLSearchParams(location.search);
+const path = location.pathname;
+const variant = path.split("/")[2];
+const nQuestions = Number(params.get("q") || 0);
+const app = document.getElementById("app");
+const state = {resume: "", cover: "", answers: {}};
+
+function render(html) { app.innerHTML = html; }
+
+function jobPage() {
+  if (variant === "cloudflare") { document.title = "Just a moment..."; return render("<p>Checking your browser</p>"); }
+  if (variant === "logged-out") {
+    document.querySelector("header").innerHTML = '<a href="/oauth/login/" data-automation="sign in">Sign in</a>';
+    return render('<h1>Software Engineer</h1><a href="/oauth/login/">Sign in</a>');
+  }
+  if (variant === "applied") return render("<h1>Software Engineer</h1><p>You applied for this job on 10 Oct 2026</p>");
+  if (variant === "closed") return render("<h1>Software Engineer</h1><p>This job is no longer advertised</p>");
+  const label = variant === "external" ? "Apply" : "Quick apply";
+  render(`<h1>Software Engineer</h1><p>ACME</p><a data-automation="job-detail-apply" href="${path}/apply${location.search}">${label}</a>`);
+}
+
+const steps = ["resume"];
+if (nQuestions) steps.push("questions");
+if (variant === "needs-profile") steps.push("profile");
+steps.push("review");
+
+function step(i) {
+  const name = steps[i];
+  history.replaceState({}, "", path + "/apply/" + name + location.search);
+  if (name === "resume") {
+    render(`<h1>Choose documents</h1>
+      <label><input type="radio" name="resume-method" value="change" data-testid="resume-method-change"> Choose a resume</label>
+      <select data-testid="select-input"><option value="">Select</option><option>Kumar_CV_2026.pdf</option><option>Old_CV.pdf</option></select>
+      <label><input type="radio" name="cover" value="none" data-testid="coverLetter-method-none"> Don't include a cover letter</label>
+      <button data-testid="continue-button">Continue</button><p id="err"></p>`);
+    app.querySelector("select").onchange = e => state.resume = e.target.value;
+    app.querySelector("[data-testid=coverLetter-method-none]").onchange = () => state.cover = "none";
+  } else if (name === "questions") {
+    const groups = QUESTIONS.slice(0, nQuestions).map((item, k) => {
+      if (item.opts.length) {
+        const opts = item.opts.map((o, j) => `<label><input type="radio" name="q${k}" value="${o}"> ${o}</label>`).join("");
+        return `<fieldset data-testid="question-${k}"><legend>${item.q}</legend>${opts}</fieldset>`;
+      }
+      return `<fieldset data-testid="question-${k}"><legend>${item.q}</legend><input type="text" name="q${k}"></fieldset>`;
+    }).join("");
+    render(`<h1>Employer questions</h1>${groups}<button data-testid="continue-button">Continue</button><p id="err"></p>`);
+  } else if (name === "profile") {
+    render(`<h1>Update your profile</h1><input id="phone" placeholder="Phone"><button data-testid="continue-button">Continue</button><p id="err"></p>`);
+  } else if (name === "review") {
+    render(`<h1>Review and submit</h1><pre id="summary">${JSON.stringify(state)}</pre>
+      <button data-testid="review-submit-application">Submit application</button>`);
+    app.querySelector("[data-testid=review-submit-application]").onclick = () => {
+      fetch("/submitted", {method: "POST", body: JSON.stringify(state)}).then(() => {
+        history.replaceState({}, "", path + "/apply/success");
+        render("<h1>Application sent</h1><p>Your application has been submitted.</p>");
+      });
+    };
+    return;
+  }
+  app.querySelector("[data-testid=continue-button]").onclick = () => {
+    const err = document.getElementById("err");
+    if (name === "resume" && !state.resume) return err.textContent = "A resume is required";
+    if (name === "questions") {
+      for (let k = 0; k < nQuestions; k++) {
+        const item = QUESTIONS[k];
+        const el = item.opts.length ? app.querySelector(`input[name=q${k}]:checked`) : app.querySelector(`input[name=q${k}]`);
+        if (!el || !el.value) return err.textContent = "Please select an answer";
+        state.answers[item.q] = el.value;
+      }
+    }
+    if (name === "profile" && !document.getElementById("phone").value) return err.textContent = "This field is required";
+    setTimeout(() => step(i + 1), 150);
+  };
+}
+
+if (path.includes("/apply")) setTimeout(() => step(0), 100); else jobPage();
+</script>
+</body>
+</html>

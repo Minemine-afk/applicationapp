@@ -29,6 +29,8 @@ class Outcome:
     detail: str = ""
     screenshot: str | None = None
     application_id: str | None = None
+    # NEEDS_INPUT only: employer questions found in the form, [{question, options}].
+    questions: list[dict] | None = None
 
 
 class Applier:

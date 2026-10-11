@@ -66,10 +66,11 @@ CREATE TABLE IF NOT EXISTS applications (
 );
 CREATE INDEX IF NOT EXISTS applications_state ON applications (state);
 
--- Your applications as MCF lists them (synced from its Applied Jobs page), including ones
--- made by hand. Jobs here, and reposts of them, are never applied to again.
-CREATE TABLE IF NOT EXISTS applied_on_mcf (
+-- Your applications as each site lists them (synced from its applied-jobs page), including
+-- ones made by hand. Jobs here, and reposts of them on any site, are never applied to again.
+CREATE TABLE IF NOT EXISTS applied_on_site (
     job_uuid      TEXT PRIMARY KEY,
+    source        TEXT NOT NULL DEFAULT 'mcf',
     title         TEXT NOT NULL DEFAULT '',
     employer      TEXT NOT NULL DEFAULT '',
     status        TEXT,
@@ -115,6 +116,16 @@ class Database:
                             ("source", "TEXT NOT NULL DEFAULT 'mcf'")):
             if name not in cols:
                 self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {type_}")
+        # applied_on_mcf became applied_on_site (with a source column) when JobStreet arrived.
+        tables = {r["name"] for r in self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "applied_on_mcf" in tables:
+            self.conn.execute(
+                """INSERT OR IGNORE INTO applied_on_site (job_uuid, source, title, employer,
+                   status, submitted_on, mcf_application_id, synced_at)
+                   SELECT job_uuid, 'mcf', title, employer, status, submitted_on,
+                          mcf_application_id, synced_at FROM applied_on_mcf""")
+            self.conn.execute("DROP TABLE applied_on_mcf")
         self.conn.commit()
 
     def close(self) -> None:
@@ -241,8 +252,9 @@ class Database:
             f"UPDATE applications SET {sets} WHERE job_uuid = ?", (*fields.values(), job_uuid)
         )
         if "state" in fields:
-            self.log(job_uuid, "application_" + fields["state"],
-                     {k: v for k, v in fields.items() if k in ("error", "mcf_application_id")})
+            payload = {k: v for k, v in fields.items() if k in ("error", "mcf_application_id")}
+            payload["source"] = "jobstreet" if job_uuid.startswith("js:") else "mcf"
+            self.log(job_uuid, "application_" + fields["state"], payload)
 
     def applications(
         self, states: Iterable[str] | None = None, limit: int | None = None,
@@ -265,11 +277,13 @@ class Database:
         rows = self.conn.execute("SELECT state, COUNT(*) n FROM applications GROUP BY state")
         return {row["state"]: row["n"] for row in rows}
 
-    def count_events(self, type_: str, since: datetime) -> int:
-        return self.conn.execute(
-            "SELECT COUNT(*) FROM events WHERE type = ? AND ts >= ?",
-            (type_, since.astimezone(timezone.utc).isoformat(timespec="seconds")),
-        ).fetchone()[0]
+    def count_events(self, type_: str, since: datetime, source: str | None = None) -> int:
+        sql = "SELECT COUNT(*) FROM events WHERE type = ? AND ts >= ?"
+        args: list[Any] = [type_, since.astimezone(timezone.utc).isoformat(timespec="seconds")]
+        if source:
+            sql += " AND json_extract(payload, '$.source') = ?"
+            args.append(source)
+        return self.conn.execute(sql, args).fetchone()[0]
 
     def first_event_ts(self, type_: str) -> datetime | None:
         row = self.conn.execute(
@@ -279,32 +293,43 @@ class Database:
 
     # --- applications as MCF lists them ---------------------------------------------------
 
-    def upsert_applied_on_mcf(self, uuid: str, title: str = "", employer: str = "",
-                              status: str | None = None, submitted_on: str | None = None,
-                              mcf_application_id: str | None = None) -> bool:
-        """Record an application MCF knows about. Returns True if it was new to us."""
+    def upsert_applied_on_site(self, uuid: str, title: str = "", employer: str = "",
+                               status: str | None = None, submitted_on: str | None = None,
+                               mcf_application_id: str | None = None, source: str | None = None,
+                               ) -> bool:
+        """Record an application a site knows about. Returns True if it was new to us."""
+        source = source or ("jobstreet" if uuid.startswith("js:") else "mcf")
         new = self.conn.execute(
-            "SELECT 1 FROM applied_on_mcf WHERE job_uuid = ?", (uuid,)).fetchone() is None
+            "SELECT 1 FROM applied_on_site WHERE job_uuid = ?", (uuid,)).fetchone() is None
         self.conn.execute(
-            """INSERT INTO applied_on_mcf (job_uuid, title, employer, status, submitted_on,
-               mcf_application_id, synced_at) VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO applied_on_site (job_uuid, source, title, employer, status,
+               submitted_on, mcf_application_id, synced_at) VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(job_uuid) DO UPDATE SET title = excluded.title,
                employer = excluded.employer, status = excluded.status,
                submitted_on = excluded.submitted_on,
                mcf_application_id = excluded.mcf_application_id, synced_at = excluded.synced_at""",
-            (uuid, title, employer, status, submitted_on, mcf_application_id, _now()))
+            (uuid, source, title, employer, status, submitted_on, mcf_application_id, _now()))
         return new
 
-    def applied_on_mcf_uuids(self) -> set[str]:
-        return {r["job_uuid"] for r in self.conn.execute("SELECT job_uuid FROM applied_on_mcf")}
+    upsert_applied_on_mcf = upsert_applied_on_site   # older name
 
-    def applied_on_mcf_keys(self) -> set[str]:
-        """Normalised employer|title of everything applied to, for catching reposts."""
+    def applied_on_site_uuids(self) -> set[str]:
+        return {r["job_uuid"] for r in self.conn.execute("SELECT job_uuid FROM applied_on_site")}
+
+    def applied_on_site_keys(self) -> set[str]:
+        """Normalised employer|title of everything applied to, on any site, to catch reposts."""
         return {applied_key(r["employer"], r["title"]) for r in self.conn.execute(
-            "SELECT employer, title FROM applied_on_mcf WHERE title != ''")}
+            "SELECT employer, title FROM applied_on_site WHERE title != ''")}
 
-    def applied_on_mcf_count(self) -> int:
-        return self.conn.execute("SELECT COUNT(*) FROM applied_on_mcf").fetchone()[0]
+    def applied_on_site_count(self, source: str | None = None) -> int:
+        if source:
+            return self.conn.execute("SELECT COUNT(*) FROM applied_on_site WHERE source = ?",
+                                     (source,)).fetchone()[0]
+        return self.conn.execute("SELECT COUNT(*) FROM applied_on_site").fetchone()[0]
+
+    applied_on_mcf_uuids = applied_on_site_uuids
+    applied_on_mcf_keys = applied_on_site_keys
+    applied_on_mcf_count = applied_on_site_count
 
     # --- key/value state ------------------------------------------------------------------
 
