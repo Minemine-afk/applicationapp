@@ -14,7 +14,10 @@ from mcf_autoapply.config import Config, load_config
 from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Database
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.models import Job
+from mcf_autoapply.pipeline import queue as Q
+from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import apply_filters, discover
+from mcf_autoapply.pipeline.pacer import Pacer
 
 app = typer.Typer(help="Find, rank and apply to jobs on MyCareersFuture.", no_args_is_help=True)
 console = Console()
@@ -180,6 +183,207 @@ def stats_cmd(config: ConfigOpt = None) -> None:
     for reason, n in db.reason_counts()[:20]:
         table.add_row(reason, str(n))
     console.print(table)
+    db.close()
+
+
+# --- applying ------------------------------------------------------------------------------
+
+STATE_STYLE = {
+    Q.APPLIED: "green", Q.DRY_RUN_OK: "cyan", Q.APPROVED: "blue", Q.NEEDS_INPUT: "yellow",
+    Q.FAILED: "red", Q.EXTERNAL: "magenta", Q.SKIPPED: "dim", Q.ALREADY_APPLIED: "green",
+    Q.CLOSED: "dim",
+}
+
+
+def _print_decisions(decisions) -> None:
+    for d in decisions:
+        style = STATE_STYLE.get(d.state, "white")
+        note = f"  [dim]{d.note}[/dim]" if d.note else ""
+        console.print(f"[{style}]{d.state:<15}[/{style}] {d.job_uuid[:8]}  {d.title}{note}")
+
+
+@app.command("approve")
+def approve_cmd(
+    job_ids: Annotated[list[str], typer.Argument(help="Job IDs (first few characters is enough)")],
+    config: ConfigOpt = None,
+) -> None:
+    """Queue jobs to apply to. Fetches each job's screening questions."""
+    cfg, db = _load(config)
+    with MCFClient(cfg.discovery.requests_per_second) as client:
+        decisions = Q.approve(db, client, AnswerBank(cfg.apply.answers_path), job_ids)
+    _print_decisions(decisions)
+    if any(d.state == Q.NEEDS_INPUT for d in decisions):
+        console.print("Answer the open questions with [cyan]mcf-apply questions[/cyan].")
+    db.close()
+
+
+@app.command("skip")
+def skip_cmd(job_ids: list[str], config: ConfigOpt = None) -> None:
+    """Mark jobs as not wanted, so auto mode never applies to them."""
+    _, db = _load(config)
+    _print_decisions(Q.skip(db, job_ids))
+    db.close()
+
+
+@app.command("queue")
+def queue_cmd(
+    config: ConfigOpt = None,
+    state: Annotated[Optional[str], typer.Option(help="Only this state")] = None,
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 50,
+) -> None:
+    """Show applications: queued, waiting on answers, applied, failed."""
+    cfg, db = _load(config)
+    rows = db.applications([state] if state else None, limit=limit)
+    table = Table(show_edge=False)
+    for col in ("ID", "State", "Score", "Title", "Company", "Note"):
+        table.add_column(col, max_width=44 if col in ("Title", "Note") else None)
+    for r in rows:
+        style = STATE_STYLE.get(r["state"], "white")
+        note = r["error"] or (r["submitted_at"] or "")[:16].replace("T", " ")
+        table.add_row(r["job_uuid"][:8], f"[{style}]{r['state']}[/{style}]",
+                      "-" if r["score"] is None else str(r["score"]), r["title"],
+                      r["company_name"], note)
+    console.print(table)
+    counts = db.application_counts()
+    console.print("  ·  ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "Queue is empty.")
+    pacer = Pacer(cfg.apply, db)
+    console.print(
+        f"Mode [bold]{cfg.apply.mode}[/bold]  ·  today {pacer.applied_today()}/{pacer.daily_cap()}"
+        f"  ·  last hour {pacer.applied_last_hour()}/{cfg.apply.hourly_cap}"
+        + (f"  ·  [red]{pacer.blocked_reason()}[/red]" if pacer.blocked_reason() else "")
+    )
+    db.close()
+
+
+@app.command("questions")
+def questions_cmd(config: ConfigOpt = None) -> None:
+    """List screening questions that still need your answer."""
+    cfg, db = _load(config)
+    waiting = Q.unanswered_questions(db)
+    if not waiting:
+        console.print("No unanswered questions.")
+    for i, (question, jobs) in enumerate(waiting.items(), 1):
+        console.print(f"[bold]{i}.[/bold] {question}")
+        console.print(f"   [dim]waiting: {'; '.join(jobs[:3])}"
+                      f"{f' +{len(jobs) - 3} more' if len(jobs) > 3 else ''}[/dim]")
+    if waiting:
+        console.print("\nAnswer with [cyan]mcf-apply answer <number> yes|no[/cyan]. "
+                      "These go to employers as your answers, so answer truthfully.")
+    db.close()
+
+
+@app.command("answer")
+def answer_cmd(
+    question: Annotated[str, typer.Argument(help="Number from `mcf-apply questions`, or the text")],
+    answer: Annotated[str, typer.Argument(help="yes or no")],
+    config: ConfigOpt = None,
+) -> None:
+    """Save your answer to a screening question and release jobs waiting on it."""
+    cfg, db = _load(config)
+    waiting = list(Q.unanswered_questions(db))
+    if question.isdigit():
+        if not 1 <= int(question) <= len(waiting):
+            console.print(f"[red]No question {question}. See `mcf-apply questions`.[/red]")
+            raise typer.Exit(1)
+        question = waiting[int(question) - 1]
+    if answer.lower() not in ("yes", "no"):
+        console.print("[red]Answer must be yes or no.[/red]")
+        raise typer.Exit(1)
+    bank = AnswerBank(cfg.apply.answers_path)
+    bank.add(question, answer)
+    console.print(f"Saved: {question} → [bold]{answer.lower()}[/bold]")
+    _print_decisions(Q.refresh_answers(db, bank))
+    db.close()
+
+
+@app.command("login")
+def login_cmd(config: ConfigOpt = None) -> None:
+    """Open a browser window so you can log in to MCF with Singpass."""
+    cfg, _ = _load(config)
+    from mcf_autoapply.mcf.browser import open_page, wait_for_login
+
+    console.print("Log in with Singpass in the browser window. Waiting up to 10 minutes…")
+    with open_page(cfg.apply, headless=False) as page:
+        ok = wait_for_login(page)
+    console.print("[green]Logged in. The session is saved for future runs.[/green]" if ok
+                  else "[red]Didn't detect a login. Run `mcf-apply login` again.[/red]")
+    if not ok:
+        raise typer.Exit(1)
+
+
+def _run_applications(cfg: Config, db: Database, dry_run: bool, limit: int | None,
+                      headless: bool | None) -> None:
+    from mcf_autoapply.mcf.applier import Applier
+    from mcf_autoapply.mcf.browser import open_page
+    from mcf_autoapply.pipeline import apply as A
+
+    live = not dry_run and cfg.apply.mode != "dry_run"
+    if not dry_run and not live:
+        console.print("[yellow]apply.mode is dry_run, so nothing will be submitted. "
+                      "Set it to manual or auto in config.yml to apply for real.[/yellow]")
+    jobs = A.pending(db, not live, limit)
+    if not jobs:
+        console.print("Nothing queued. Approve jobs with `mcf-apply approve <ID>`"
+                      + (" or let auto mode pick them." if cfg.apply.mode == "auto" else "."))
+        return
+
+    def show(title, outcome):
+        style = STATE_STYLE.get(outcome.state, "red")
+        console.print(f"[{style}]{outcome.state:<15}[/{style}] {title}  [dim]{outcome.detail}[/dim]")
+
+    console.print(f"{'Submitting' if live else 'Dry run (no submissions)'}: "
+                  f"up to {len(jobs)} job(s)…")
+    with open_page(cfg.apply, headless=headless) as page:
+        result = A.run(
+            cfg, db,
+            lambda: Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live),
+            dry_run=not live, limit=limit, on_outcome=show,
+        )
+    if result.stopped:
+        console.print(f"[yellow]Stopped: {result.stopped}[/yellow]")
+
+
+@app.command("apply")
+def apply_cmd(
+    config: ConfigOpt = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Fill the forms but never submit")] = False,
+    limit: Annotated[Optional[int], typer.Option("--limit", "-n")] = None,
+    headless: Annotated[Optional[bool], typer.Option("--headless/--show-browser")] = None,
+) -> None:
+    """Apply to queued jobs, within your hourly and daily limits."""
+    cfg, db = _load(config)
+    _run_applications(cfg, db, dry_run, limit, headless)
+    db.close()
+
+
+@app.command("run")
+def run_cmd(
+    config: ConfigOpt = None,
+    headless: Annotated[Optional[bool], typer.Option("--headless/--show-browser")] = True,
+) -> None:
+    """Discover new jobs, auto-approve (in auto mode) and apply. Meant for cron, hourly."""
+    cfg, db = _load(config)
+    with MCFClient(cfg.discovery.requests_per_second) as client:
+        result = discover(cfg, db, client)
+        console.print(f"Discovered {len(result.new_uuids)} new, "
+                      f"{len(result.new_passed)} passed filters.")
+        bank = AnswerBank(cfg.apply.answers_path)
+        decisions = Q.auto_approve(cfg, db, client, bank)
+    _print_decisions(decisions)
+    _run_applications(cfg, db, dry_run=False, limit=None, headless=headless)
+    db.close()
+
+
+@app.command("unpause")
+def unpause_cmd(config: ConfigOpt = None) -> None:
+    """Resume submissions after an automatic pause. The daily cap restarts its ramp."""
+    cfg, db = _load(config)
+    pacer = Pacer(cfg.apply, db)
+    if not (p := pacer.paused()):
+        console.print("Not paused.")
+    else:
+        pacer.unpause()
+        console.print(f"Unpaused (was: {p['reason']}). Daily cap is now {pacer.daily_cap()}.")
     db.close()
 
 

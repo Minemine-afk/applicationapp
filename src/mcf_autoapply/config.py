@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from datetime import time
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,6 +50,30 @@ class Ranking(_Strict):
     skills_for_full_marks: int = Field(6, ge=1)
 
 
+class Apply(_Strict):
+    # dry_run: go through the whole form, screenshot the review page, never submit.
+    # manual:  submit only jobs you approve with `mcf-apply approve`.
+    # auto:    also approve jobs at or above auto_apply_min_score automatically.
+    mode: Literal["dry_run", "manual", "auto"] = "dry_run"
+    auto_apply_min_score: int = Field(70, ge=0, le=100)
+    auto_apply_fresh_grad_only: bool = False
+    # Part of the file name of the resume on your MCF profile to attach. Empty = MCF's default.
+    resume_name: str = ""
+    answers_path: Path = Path("./answers.yml")
+    daily_cap: int = Field(15, ge=1)
+    hourly_cap: int = Field(4, ge=1)
+    # Daily cap steps up one level per clean week; restarts from the first level after a pause.
+    ramp: list[int] = Field(default_factory=lambda: [15, 25, 40])
+    active_hours: tuple[time, time] = (time(8, 0), time(22, 0))
+    timezone: str = "Asia/Singapore"
+    delay_seconds: tuple[float, float] = (45, 120)
+    max_failures_per_hour: int = Field(2, ge=1)
+    browser_profile: Path = Path("./data/browser-profile")
+    browser_executable: Path | None = None
+    headless: bool = False
+    screenshots_dir: Path = Path("./data/screenshots")
+
+
 class Discovery(_Strict):
     page_size: int = Field(100, ge=1, le=100)
     max_pages: int = Field(5, ge=1)
@@ -60,6 +86,7 @@ class Config(_Strict):
     searches: list[Search]
     filters: Filters = Field(default_factory=Filters)
     ranking: Ranking = Field(default_factory=Ranking)
+    apply: Apply = Field(default_factory=Apply)
     discovery: Discovery = Field(default_factory=Discovery)
 
 
@@ -71,7 +98,15 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         )
     data = yaml.safe_load(path.read_text()) or {}
     cfg = Config.model_validate(data)
-    # Resolve the DB path relative to the config file, not the current directory.
-    if not cfg.db_path.is_absolute():
-        cfg.db_path = (path.parent / cfg.db_path).resolve()
+    # Resolve relative paths against the config file, not the current directory.
+    base = path.parent
+    cfg.db_path = _resolve(base, cfg.db_path)
+    for name in ("answers_path", "browser_profile", "browser_executable", "screenshots_dir"):
+        setattr(cfg.apply, name, _resolve(base, getattr(cfg.apply, name)))
     return cfg
+
+
+def _resolve(base: Path, p: Path | None) -> Path | None:
+    if p is None or str(p) == ":memory:" or p.is_absolute():
+        return p
+    return (base / p).resolve()

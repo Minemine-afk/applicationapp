@@ -4,15 +4,21 @@ MCF Auto-Apply finds, ranks and applies to jobs on [MyCareersFuture](https://www
 You approve each application or set rules for automatic approval.
 See [DESIGN.md](DESIGN.md) for the architecture and build plan.
 
-**Status: phase 1 (discover, filter, rule-based ranking).** AI scoring, cover letters and applying come in later phases.
+**Status:** discovery, filtering, ranking and applying (with a dry-run mode) are built. AI scoring
+and the review dashboard come next.
 
 ## Setup
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
+.venv/bin/playwright install chromium   # browser used for applying
 cp config.example.yml config.yml     # then edit searches and filters
+cp answers.example.yml answers.yml   # your screening-question answers
 ```
+
+Run it on your own computer: logging in needs Singpass on your phone and a visible browser
+window.
 
 The example config searches for software, AI, DevOps/cloud and data roles (including related
 titles and fresh-graduate searches), for someone with 0–2 years of experience.
@@ -65,6 +71,52 @@ Discovery only fetches until it reaches jobs it already has, so a repeat run tak
 ```cron
 5 8-21 * * * cd /path/to/applicationapp && .venv/bin/mcf-apply discover >> data/discover.log 2>&1
 ```
+
+## Applying
+
+MCF applications have no cover letter. You pick a resume from your MCF profile and answer
+the employer's yes/no screening questions, if there are any. The tool does exactly that in a
+real browser, logged in as you.
+
+```bash
+mcf-apply login                 # opens a browser; log in with Singpass yourself (once per session)
+mcf-apply approve 8c7d83be 9dfbf2a6   # queue jobs (IDs from `mcf-apply list`)
+mcf-apply questions             # screening questions that need your answer
+mcf-apply answer 1 yes          # saved to answers.yml and reused for every job that asks it
+mcf-apply apply --dry-run       # fill each form up to the review page, screenshot, don't submit
+mcf-apply queue                 # what's queued, applied, failed and why
+```
+
+Check the screenshots in `data/screenshots/`. When they look right, set `apply.mode` in
+`config.yml`:
+
+- `manual`: `mcf-apply apply` submits only the jobs you approved.
+- `auto`: jobs scoring `auto_apply_min_score` or more are approved by themselves as well.
+
+`mcf-apply run` does everything in one go (discover, auto-approve, apply), headless, for cron:
+
+```cron
+5 8-21 * * * cd /path/to/applicationapp && .venv/bin/mcf-apply run >> data/run.log 2>&1
+```
+
+### Safety rules
+
+- **Login:** the tool never types your Singpass details. When the session expires, the run
+  stops and asks you to run `mcf-apply login` again.
+- **Answers:** screening answers only come from `answers.yml`. A job with an unanswered question
+  waits in `needs_input` and is never guessed.
+- **Pacing:** submissions happen only within `active_hours`, at most `hourly_cap` per hour, with
+  a random 45–120 s gap. The daily cap starts at 15 and rises weekly to 40 (`ramp`).
+- **Automatic pause:** a CAPTCHA or repeated failures pause all submissions until you run
+  `mcf-apply unpause`. The daily cap then restarts at the bottom of the ramp.
+- **No double applying:** one application per job, and jobs MCF already shows as "Applied" are
+  skipped.
+- **Stuck forms:** if MCF asks for something the tool can't fill (for example missing profile
+  details), that job is marked `failed` with a screenshot and the page HTML, and nothing is
+  submitted.
+
+MCF's own guidance is to "avoid mass applications and focus on roles where you can genuinely
+add value", so keep the threshold meaningful.
 
 ## Tests
 

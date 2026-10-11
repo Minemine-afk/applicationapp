@@ -59,6 +59,12 @@ class MCFClient:
     def get_job(self, uuid: str) -> dict[str, Any]:
         return self._get(f"/v2/jobs/{uuid}")
 
+    def screening_questions(self, uuid: str) -> list[str]:
+        """The employer's yes/no screening questions for a job (often none)."""
+        data = self._get(f"/v2/jobs/{uuid}/screening-questions")
+        items = data.get("results", []) if isinstance(data, dict) else data
+        return [q["question"].strip() for q in items or [] if q.get("question")]
+
     def _get(self, path: str, params: dict | None = None) -> dict[str, Any]:
         for attempt in range(self._max_retries + 1):
             self._throttle()

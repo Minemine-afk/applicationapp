@@ -166,6 +166,26 @@ ranking:
   entry_level_weight: 0.6             # share of the score for entry-level fit; the rest is skills
   skills_for_full_marks: 6            # this many of your skills mentioned = full skills score
 
+apply:
+  # dry_run: fill every form up to the review page and screenshot it, never submit.
+  # manual:  submit only the jobs you approve (`mcf-apply approve <ID>`).
+  # auto:    also approve jobs scoring auto_apply_min_score or more by itself.
+  mode: dry_run
+  auto_apply_min_score: 70
+  auto_apply_fresh_grad_only: false
+  resume_name: ""                     # part of the file name of the MCF resume to attach; "" = MCF's default
+  answers_path: ./answers.yml         # your yes/no screening answers (`mcf-apply questions`)
+  hourly_cap: 4
+  daily_cap: 40                       # hard ceiling
+  ramp: [15, 25, 40]                  # daily cap steps up one level per week; restarts after a pause
+  active_hours: ["08:00", "22:00"]
+  timezone: Asia/Singapore
+  delay_seconds: [45, 120]            # random wait between submissions
+  max_failures_per_hour: 2            # more than this pauses submissions
+  browser_profile: ./data/browser-profile   # keeps your MCF login between runs
+  headless: false                     # `mcf-apply run` is headless regardless
+  screenshots_dir: ./data/screenshots
+
 discovery:
   page_size: 100
   max_pages: 5                        # per search term, per run

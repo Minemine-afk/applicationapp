@@ -1,0 +1,6 @@
+# Copy to answers.yml. These are sent to employers as your answers to their yes/no
+# screening questions, so keep them truthful. `mcf-apply questions` lists new ones
+# and `mcf-apply answer <number> yes|no` saves them here.
+
+- question: "This position is classified as Fresh/Entry level. Are you open to considering this role?"
+  answer: "yes"

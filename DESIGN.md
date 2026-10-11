@@ -33,7 +33,9 @@ each application or setting rules for which ones go through without asking.
 | Job detail | `GET /v2/jobs/{uuid}` returns `title`, `description` (HTML), `skills[]`, `salary{min,max,type}`, `employmentTypes`, `positionLevels`, `minimumYearsExperience`, `postedCompany`, `metadata.jobPostId`, `status`. | Gives the filter and scorer structured fields. |
 | Screening questions | Each job links to `_links.screeningQuestions`. | Fetch these before applying. Unanswered questions pause the job for your review. |
 | robots.txt | `User-agent: * / Disallow:` (crawling allowed). | Still rate-limit politely (see §7). |
-| Applying | Requires Singpass login on `www.mycareersfuture.gov.sg`. Uses your MCF profile resume or an uploaded one. Some jobs send you to an external employer site instead. | Use browser automation (Playwright) with a persistent profile. External-site jobs are flagged "manual". |
+| Applying | Requires Singpass login. The site sends one GraphQL mutation, `createApplication(documentId, jobUuid, jobScreeningQuestionResponses, …)`: a resume from your MCF profile plus yes/no answers. **There is no cover-letter field.** Careers@Gov jobs (`psdUrl` set) apply elsewhere. | Playwright drives the real form in a persistent, logged-in profile. Success is confirmed from the page and from the mutation's response. |
+| Screening questions | Public: `GET /v2/jobs/{uuid}/screening-questions` returns `[{question}]`, always yes/no. Only ~1 in 10 jobs has any. | Fetched when a job is approved and answered from `answers.yml`. |
+| Application limits | None found in the site's code, but its UI warns: "Avoid mass applications and focus on roles where you can genuinely add value." | Conservative pacing defaults (§3.7). |
 
 > Re-check MCF's Terms of Use before enabling automatic submission. The discovery, scoring and
 > drafting features are useful on their own even if you decide to click "Submit" yourself.
@@ -109,6 +111,9 @@ against each one and the best-scoring version is used for the application. Cache
 only re-scored when your resume or the prompt changes.
 
 ### 3.4 Tailor (`pipeline/tailor.py`)
+> MCF applications take no cover letter (§2), so for MCF tailoring means picking the right
+> resume and answering screening questions. Cover letters only matter for external sites.
+
 - **Resume versions**: `profile.resumes` holds two or three versions, each tagged with the job
   types it targets (e.g. analytics, BI, data engineering). The best-scoring version is uploaded,
   so more jobs clear the threshold without stretching the truth.
@@ -141,7 +146,14 @@ buttons. Tapping Apply queues the job with its draft cover letter and saved answ
 clear the borderline jobs in seconds wherever you are. `needs_input` questions are also sent as
 Telegram messages, and your reply is saved to the answer bank.
 
-### 3.6 Apply (`mcf/applier.py`)
+### 3.6 Apply (`mcf/applier.py`) (built)
+The page hooks come from the MCF web app's own element IDs and `data-cy` attributes, kept in
+`mcf/selectors.py`. They are tested against a stand-in page (`tests/fixtures/fake_mcf.html`).
+The flow is: job page → Apply → *Add personal details* / *Upload resume* / *Add experience* (shown
+only when needed) → *Questions From Employer* → *Review application* → Submit → "Your
+application is on its way!". A step that MCF won't let past (a validation message stays) fails
+that job for you to finish by hand.
+
 - Playwright with a **persistent browser context** (`~/.mcf-autoapply/browser-profile`), so
   your Singpass session cookies survive between runs.
 - `mcf-apply login` opens a visible browser window. You log in with Singpass and the tool
@@ -341,8 +353,8 @@ applicationapp/
 | **1. Discover + filter** ✅ | `mcf-apply discover` fills SQLite; `mcf-apply list` shows matches | A better job feed than MCF's email alerts |
 | **2. Score + tailor** | LLM fit scores, gap analysis, draft cover letters | Shows where to spend effort |
 | **3. Review dashboard** | Approve / edit / skip UI, answer-bank editor | One place to manage everything |
-| **4. Apply (dry run)** | Playwright fills forms up to the submit button and saves screenshots | Lets you check the automation safely |
-| **5. Apply (live)** | Real submission, hourly pacing and ramp, automatic pause, Telegram quick approvals, hourly scheduler | Fully automated with you in control |
+| **4. Apply (dry run)** ✅ | Playwright fills forms up to the submit button and saves screenshots | Lets you check the automation safely |
+| **5. Apply (live)** ✅ (Telegram pending) | Real submission, hourly pacing and ramp, automatic pause, Telegram quick approvals, hourly scheduler | Fully automated with you in control |
 | **6. Outcomes** | Sync "My Applications" status; response-rate stats per score bucket | Shows how to tune the threshold |
 
 Testing: unit-test the filter, scoring and answer matching against saved fixtures. Test the

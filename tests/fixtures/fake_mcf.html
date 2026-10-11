@@ -1,0 +1,103 @@
+<!doctype html>
+<!-- A stand-in for the MCF job page and apply flow, using the same element IDs and
+     data-cy hooks as the real site (see src/mcf_autoapply/mcf/selectors.py).
+     The variant comes from the URL: /job/<variant>?q=<number of screening questions>. -->
+<html>
+<head><meta charset="utf-8"><title>Fake MCF</title></head>
+<body>
+<nav><a id="navbar-applied-jobs" href="#">Applied jobs</a></nav>
+<main id="app"></main>
+<script>
+const QUESTIONS = [
+  "Do you have a degree in Computer Science or a related field?",
+  "Are you able to start work within one month?",
+  "Do you have at least 5 years of Kubernetes experience?",
+];
+const params = new URLSearchParams(location.search);
+const variant = location.pathname.split("/").pop();
+const nQuestions = Number(params.get("q") || 0);
+const app = document.getElementById("app");
+const state = { resume: "Kumar_CV.pdf", answers: {} };
+
+function el(html) { const d = document.createElement("div"); d.innerHTML = html; return d; }
+function render(html) { app.innerHTML = ""; app.appendChild(el(html)); }
+
+function jobPage() {
+  if (variant === "captcha") return render('<iframe src="https://www.google.com/recaptcha/api2/anchor"></iframe>');
+  if (variant === "closed") return render("<p>Applications have closed for this job</p>");
+  if (variant === "logged-out") {
+    document.getElementById("navbar-applied-jobs").remove();
+    return render('<button id="login_button">Log in to Apply</button>');
+  }
+  const label = { applied: "Applied", "careers-gov": "Apply via Careers@Gov" }[variant] || "Apply";
+  render(`<h1>Associate Software Engineer</h1><button id="job-details-apply-button">${label}</button>`);
+  document.getElementById("job-details-apply-button").onclick = () => {
+    if (variant === "not-permitted") return render('<div id="job-not-permitted-page">This job may have closed, or you may have already applied for this job.</div>');
+    history.pushState({}, "", location.pathname + "/apply" + location.search);
+    // Steps render asynchronously, like the real React app.
+    setTimeout(() => step(0), 150);
+  };
+}
+
+const steps = ["resume"];
+if (variant === "needs-details") steps.push("experience");
+if (nQuestions) steps.push("screening");
+steps.push("review");
+const NEXT_LABEL = { experience: "Add experience", screening: "Screening questions", review: "Review application" };
+
+function header(text) { return `<h2 data-cy="job-application__header">${text}</h2>`; }
+function nextButton(i, withClass) {
+  const label = "Next: " + NEXT_LABEL[steps[i + 1]];
+  // Only some steps carry the class, so the applier's button-name fallback gets exercised.
+  return `<button id="next" ${withClass ? 'class="application-next-step-button"' : ""}>${label}</button><p id="err"></p>`;
+}
+
+function step(i) {
+  const name = steps[i];
+  if (name === "resume") {
+    render(header("Upload resume") + `<p>Select or upload your resume for this job application.</p>
+      <label><input type="radio" name="resume" value="Kumar_CV.pdf" checked> Kumar_CV.pdf</label>
+      <label><input type="radio" name="resume" value="Old_CV_2024.pdf"> Old_CV_2024.pdf</label>` + nextButton(i, true));
+    document.querySelectorAll('input[name=resume]').forEach(r => r.onchange = () => state.resume = r.value);
+  } else if (name === "experience") {
+    render(header("Add experience") + `<input id="job-title" placeholder="Job title">` + nextButton(i, false));
+  } else if (name === "screening") {
+    const rows = QUESTIONS.slice(0, nQuestions).map((q, k) => `
+      <div class="question-row" data-cy="screening-questions__question"><p>${q}</p>
+        <input type="radio" id="answer-${k}-yes" name="answer-${k}" value="yes"><label for="answer-${k}-yes">Yes</label>
+        <input type="radio" id="answer-${k}-no" name="answer-${k}" value="no"><label for="answer-${k}-no">No</label>
+      </div>`).join("");
+    render(header("Questions From Employer") + `<div id="question-card-list">${rows}</div>` + nextButton(i, false));
+  } else if (name === "review") {
+    render(header("Review application") + `<pre id="summary"></pre>
+      <button id="job-application-review__submit-button">Submit</button>`);
+    document.getElementById("summary").textContent = JSON.stringify(state);
+    document.getElementById("job-application-review__submit-button").onclick = submit;
+    return;
+  }
+  document.getElementById("next").onclick = () => {
+    const err = document.getElementById("err");
+    if (name === "experience" && !document.getElementById("job-title").value) return err.textContent = "Please fill this in";
+    if (name === "screening") {
+      for (let k = 0; k < nQuestions; k++) {
+        const picked = document.querySelector(`input[name=answer-${k}]:checked`);
+        if (!picked) return err.textContent = "Please select an option";
+        state.answers[k] = picked.value;
+      }
+    }
+    setTimeout(() => step(i + 1), 150);
+  };
+}
+
+async function submit() {
+  if (variant === "submit-error") return app.prepend(el('<div id="error-banner">Something went wrong. Please try again later.</div>'));
+  const res = await fetch("/graphql", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query: "mutation createApplication(...)", variables: state }) });
+  await res.json();
+  render('<h2 data-cy="submission-success-text">Your application is on its way!</h2>');
+}
+
+jobPage();
+</script>
+</body>
+</html>

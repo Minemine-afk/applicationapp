@@ -47,6 +47,28 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS jobs_status_posted ON jobs (status, posted_at DESC);
 
+-- One row per job you have decided on. job_uuid as primary key = never apply twice.
+CREATE TABLE IF NOT EXISTS applications (
+    job_uuid      TEXT PRIMARY KEY REFERENCES jobs(uuid),
+    state         TEXT NOT NULL,
+    approved_by   TEXT,                       -- user | auto
+    questions     TEXT NOT NULL DEFAULT '[]', -- screening questions from MCF
+    answers       TEXT NOT NULL DEFAULT '[]', -- yes/no per question, null = unanswered
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    submitted_at  TEXT,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    error         TEXT,
+    screenshot    TEXT,
+    mcf_application_id TEXT
+);
+CREATE INDEX IF NOT EXISTS applications_state ON applications (state);
+
+CREATE TABLE IF NOT EXISTS state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     job_uuid TEXT,
@@ -171,6 +193,87 @@ class Database:
             (STATUS_FILTERED,),
         )
         return [(row["reason"], row["n"]) for row in rows]
+
+    # --- applications -------------------------------------------------------------------
+
+    def application(self, job_uuid: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM applications WHERE job_uuid = ?", (job_uuid,)
+        ).fetchone()
+
+    def create_application(
+        self, job_uuid: str, state: str, approved_by: str | None,
+        questions: list[str], answers: list[str | None], error: str | None = None,
+    ) -> None:
+        now = _now()
+        self.conn.execute(
+            """INSERT INTO applications (job_uuid, state, approved_by, questions, answers,
+               created_at, updated_at, error) VALUES (?,?,?,?,?,?,?,?)""",
+            (job_uuid, state, approved_by, json.dumps(questions), json.dumps(answers),
+             now, now, error),
+        )
+        self.log(job_uuid, "application_" + state, {"approved_by": approved_by})
+
+    def update_application(self, job_uuid: str, **fields: Any) -> None:
+        fields["updated_at"] = _now()
+        for key in ("questions", "answers"):
+            if key in fields and not isinstance(fields[key], str):
+                fields[key] = json.dumps(fields[key])
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        self.conn.execute(
+            f"UPDATE applications SET {sets} WHERE job_uuid = ?", (*fields.values(), job_uuid)
+        )
+        if "state" in fields:
+            self.log(job_uuid, "application_" + fields["state"],
+                     {k: v for k, v in fields.items() if k in ("error", "mcf_application_id")})
+
+    def applications(
+        self, states: Iterable[str] | None = None, limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        """Applications joined with their job, best score first."""
+        sql = """SELECT a.*, j.title, j.company_name, j.url, j.score, j.posted_at, j.raw
+                 FROM applications a JOIN jobs j ON j.uuid = a.job_uuid WHERE 1=1"""
+        args: list[Any] = []
+        if states:
+            states = list(states)
+            sql += f" AND a.state IN ({','.join('?' * len(states))})"
+            args += states
+        sql += " ORDER BY j.score IS NULL, j.score DESC, j.posted_at DESC"
+        if limit:
+            sql += " LIMIT ?"
+            args.append(limit)
+        return self.conn.execute(sql, args).fetchall()
+
+    def application_counts(self) -> dict[str, int]:
+        rows = self.conn.execute("SELECT state, COUNT(*) n FROM applications GROUP BY state")
+        return {row["state"]: row["n"] for row in rows}
+
+    def count_events(self, type_: str, since: datetime) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE type = ? AND ts >= ?",
+            (type_, since.astimezone(timezone.utc).isoformat(timespec="seconds")),
+        ).fetchone()[0]
+
+    def first_event_ts(self, type_: str) -> datetime | None:
+        row = self.conn.execute(
+            "SELECT MIN(ts) FROM events WHERE type = ?", (type_,)
+        ).fetchone()
+        return datetime.fromisoformat(row[0]) if row and row[0] else None
+
+    # --- key/value state ------------------------------------------------------------------
+
+    def get_state(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_state(self, key: str, value: str | None) -> None:
+        if value is None:
+            self.conn.execute("DELETE FROM state WHERE key = ?", (key,))
+        else:
+            self.conn.execute(
+                "INSERT INTO state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value),
+            )
 
     def log(self, job_uuid: str | None, type_: str, payload: dict[str, Any] | None = None) -> None:
         self.conn.execute(
