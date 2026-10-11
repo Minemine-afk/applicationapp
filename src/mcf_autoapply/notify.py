@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from mcf_autoapply.config import Config, get_env
 from mcf_autoapply.db import STATUS_NEW, Database
-from mcf_autoapply.overrides import MODES, set_mode
+from mcf_autoapply.overrides import MAX_DAILY, MAX_HOURLY, MODES, set_limits, set_mode
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
@@ -33,6 +33,7 @@ COMMAND_HELP = {
     "questions": "Screening questions waiting for your answer",
     "queue": "What's queued, applied or failed",
     "mode": "Switch dry run / manual / auto",
+    "limits": "Show or set how many to apply per hour and per day",
     "pause": "Stop submitting until /resume",
     "resume": "Start submitting again",
     "help": "All commands",
@@ -327,13 +328,15 @@ class Notifier:
             "/jobs": self._cmd_jobs,
             "/questions": self._cmd_questions,
             "/mode": self._cmd_mode,
+            "/limits": self._cmd_limits,
             "/pause": self._cmd_pause,
             "/resume": self._cmd_resume,
         }
 
     def help_text(self, handlers: dict | None = None) -> str:
         handlers = handlers or self._handlers
-        extra = {"login": "Log in to MCF with Singpass", "run": "Search and apply now"}
+        extra = {"login": "Log in to MCF with Singpass", "run": "Search and apply now",
+                 "apply": "Apply to the queue now, without searching"}
         lines = ["<b>Commands</b>"]
         lines += [f"/{n} — {d}" for n, d in extra.items() if f"/{n}" in handlers]
         lines += [f"/{n} — {d}" for n, d in COMMAND_HELP.items()]
@@ -345,7 +348,8 @@ class Notifier:
         """Fill Telegram's "/" menu with the commands."""
         if self.api is None:
             return
-        items = ({"login": "Log in to MCF with Singpass", "run": "Search and apply now"}
+        items = ({"login": "Log in to MCF with Singpass", "run": "Search and apply now",
+                  "apply": "Apply to the queue now, without searching"}
                  if serve else {}) | COMMAND_HELP
         try:
             self.api.call("setMyCommands", commands=[
@@ -374,6 +378,23 @@ class Notifier:
             return self.mode_text(changed=True)
         self._send(self.mode_text(), [[(MODE_LABELS[m], f"m:{m}") for m in MODES]])
         return None
+
+    def _cmd_limits(self, args: str) -> str:
+        a = self.cfg.apply
+        parts = args.split()
+        if len(parts) == 2 and all(p.isdigit() for p in parts):
+            try:
+                set_limits(self.cfg, self.db, int(parts[0]), int(parts[1]))
+            except ValueError as e:
+                return f"Can't set that: {e}."
+            return (f"Limits set: <b>{a.hourly_cap}/hour, {a.daily_cap}/day</b>, with a "
+                    f"{int(a.delay_seconds[0])}–{int(a.delay_seconds[1])} s gap between submissions.\n"
+                    "MCF asks job seekers to avoid mass applications, so keep this sensible.")
+        ramp = f" (rising weekly to {max(a.ramp)})" if a.ramp else ""
+        return (f"Current limits: <b>{a.hourly_cap}/hour, {Pacer(a, self.db).daily_cap()}/day</b>"
+                f"{ramp}, active {a.active_hours[0]:%H:%M}–{a.active_hours[1]:%H:%M}.\n"
+                f"Change with <code>/limits &lt;per hour&gt; &lt;per day&gt;</code>, e.g. "
+                f"<code>/limits 6 30</code> (max {MAX_HOURLY}/hour, {MAX_DAILY}/day).")
 
     def mode_text(self, changed: bool = False) -> str:
         mode = self.cfg.apply.mode

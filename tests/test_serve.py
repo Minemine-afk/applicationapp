@@ -139,7 +139,7 @@ def test_telegram_answers_while_a_long_run_is_in_progress(cfg, db, tg):
     assert real_time.monotonic() - t0 < 5          # answered without waiting for the run
     assert any("⏳ Busy: searching and applying" in t for t in texts)
     assert "A run is already in progress or queued." in texts
-    assert any("login will start as soon as the current run finishes" in t for t in texts)
+    assert any("next in line" in t for t in texts)   # login is queued ahead of other tasks
     release.set()
 
     # One task at a time, in order, each queued once.
@@ -148,3 +148,32 @@ def test_telegram_answers_while_a_long_run_is_in_progress(cfg, db, tg):
                        lambda m: None, background=False)
     assert tasks.submit("a") == "started" and tasks.submit("b") == "started"
     assert order == ["a", "b"] and not tasks.busy
+
+
+def test_apply_command_skips_search_and_login_jumps_the_queue(cfg, db, tg):
+    from mcf_autoapply.runner import TaskRunner
+    order = []
+    tasks = TaskRunner({"run": lambda: order.append("run"), "apply": lambda: order.append("apply"),
+                        "login": lambda: order.append("login")}, lambda m: None, background=False)
+    # Simulate a running task holding the worker: queue behind it, login first.
+    tasks.current = "run"
+    assert tasks.submit("apply") == "queued"
+    assert tasks.submit("login", first=True) == "queued"
+    assert tasks._queue == ["login", "apply"]
+    tasks.current = None
+    tasks._drain()
+    assert order == ["login", "apply"]
+
+    notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    tg.pending_updates += [message(1, "/apply")]
+    applied = []
+    import mcf_autoapply.runner as R
+    original = R.apply_only
+    R.apply_only = lambda *a, **k: applied.append(1)
+    try:
+        serve(cfg, db, notifier, lambda m: None, run=lambda: None, do_login=lambda: True,
+              max_loops=1, background=False)
+    finally:
+        R.apply_only = original
+    assert applied == [1]
+    assert any(t.startswith("Applying to the queue now") for t in [b["text"] for b in tg.sent()])

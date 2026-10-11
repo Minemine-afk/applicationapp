@@ -116,6 +116,8 @@ also makes mcf-apply start when you log in. Then keep `mcf-apply serve` running 
 | `/jobs [n]` | Best jobs not applied to yet, with **Apply / Skip** |
 | `/questions` | Unanswered screening questions with **Yes / No**; answers saved to `answers.yml` |
 | `/run` | Search and apply now |
+| `/apply` | Apply to the queue now, without searching first |
+| `/limits [h d]` | Show or set the per-hour and per-day caps (max 10/60) |
 | `/queue`, `/status` | Queue, today's count, pause state |
 | `/pause`, `/resume` | Stop or restart submissions |
 

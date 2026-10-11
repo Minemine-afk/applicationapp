@@ -99,7 +99,7 @@ class Serve(_Strict):
 class Discovery(_Strict):
     page_size: int = Field(100, ge=1, le=100)
     max_pages: int = Field(5, ge=1)
-    requests_per_second: float = Field(1.0, gt=0, le=5)
+    requests_per_second: float = Field(2.0, gt=0, le=5)
 
 
 class Config(_Strict):

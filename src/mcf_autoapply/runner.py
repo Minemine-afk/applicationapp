@@ -92,6 +92,14 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
                          sum(d.state == Q.APPROVED for d in decisions))
 
 
+def apply_only(cfg: Config, db: Database, notifier: Notifier, log: Log,
+               headless: bool | None = True) -> None:
+    """Apply to what's already queued, without searching first (/apply)."""
+    apply_overrides(cfg, db)
+    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log)
+    finish_notifications(notifier, result, log)
+
+
 def login(cfg: Config, log: Log, notifier: Notifier | None = None,
           headless: bool | None = None) -> bool:
     """Open the Singpass QR login. Each QR goes to Telegram (if linked) and stays on screen."""
@@ -192,13 +200,19 @@ class TaskRunner:
         with self._lock:
             return self.current or (self._queue[0] if self._queue else None)
 
-    def submit(self, name: str) -> str:
-        """Queue a task. Returns "started", "queued" (after another task) or "already"."""
+    def submit(self, name: str, first: bool = False) -> str:
+        """Queue a task. Returns "started", "queued" (after another task) or "already".
+
+        `first` puts it ahead of other queued tasks (it still waits for the running one).
+        """
         with self._lock:
             if name == self.current or name in self._queue:
                 return "already"
             state = "queued" if self.busy else "started"
-            self._queue.append(name)
+            if first:
+                self._queue.insert(0, name)
+            else:
+                self._queue.append(name)
         if self._background:
             self._wake.set()
         else:
@@ -226,7 +240,8 @@ class TaskRunner:
                     self.current = None
 
 
-ACTIVITY = {"run": "searching and applying", "login": "waiting for your Singpass login"}
+ACTIVITY = {"run": "searching and applying", "apply": "applying",
+            "login": "waiting for your Singpass login"}
 
 
 def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
@@ -263,6 +278,14 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
                 log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
                 wn.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
 
+    def apply_task() -> None:
+        with worker_notifier() as (wdb, wn):
+            try:
+                apply_only(cfg, wdb, wn, log)
+            except Exception as e:
+                log(f"[red]Apply failed: {e}[/red]\n{traceback.format_exc()}")
+                wn.alert("run_error", f"Applying failed: {type(e).__name__}: {e}")
+
     def login_task() -> None:
         with worker_notifier() as (wdb, wn):
             wn._send("Opening the Singpass login. The QR code will arrive here in a few "
@@ -277,20 +300,28 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         if ok:
             tasks.submit("run")
 
-    tasks = TaskRunner({"run": run_task, "login": login_task}, log, background)
+    tasks = TaskRunner({"run": run_task, "apply": apply_task, "login": login_task}, log,
+                       background)
 
     def run_cmd(args: str) -> str:
-        return {"started": "Starting a run now. Results arrive here when it's done.",
+        return {"started": "Starting a run now (search, then apply). Results arrive here "
+                           "when it's done. /apply skips the search.",
                 "queued": "A run will start as soon as the current task finishes.",
                 "already": "A run is already in progress or queued."}[tasks.submit("run")]
 
-    def login_cmd(args: str) -> str | None:
-        return {"started": None,   # the login task sends its own messages
-                "queued": "The login will start as soon as the current run finishes "
-                          "(usually a few minutes).",
-                "already": "A login is already in progress or queued."}[tasks.submit("login")]
+    def apply_cmd(args: str) -> str:
+        return {"started": "Applying to the queue now, no search first.",
+                "queued": "Applying will start as soon as the current task finishes.",
+                "already": "Applying is already in progress or queued."}[tasks.submit("apply")]
 
-    commands = {"/run": run_cmd, "/login": login_cmd}
+    def login_cmd(args: str) -> str | None:
+        busy = ACTIVITY.get(tasks.current, "the current task")
+        return {"started": None,   # the login task sends its own messages
+                "queued": f"The login will start as soon as {busy} finishes; it's next in line.",
+                "already": "A login is already in progress or queued."}[
+                    tasks.submit("login", first=True)]
+
+    commands = {"/run": run_cmd, "/apply": apply_cmd, "/login": login_cmd}
     notifier.register_commands(serve=True)
     notifier.clear_login_qr()   # a QR from before a restart can't be approved any more
     notifier._send("🟢 <b>mcf-apply is running.</b> Searching for jobs now; "

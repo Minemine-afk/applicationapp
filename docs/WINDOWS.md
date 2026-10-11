@@ -50,6 +50,8 @@ Open your bot in Telegram. Type `/` to see the commands.
 | `/jobs` | The best jobs you haven't applied to, with **Apply** and **Skip** buttons. `/jobs 10` shows 10. |
 | `/questions` | Employers' yes/no screening questions waiting for you. Answer truthfully: they go to employers. |
 | `/run` | Search and apply now, instead of waiting for the hourly run. |
+| `/apply` | Apply to the queue now, without searching first (faster). |
+| `/limits` | Show or set how many to apply per hour and per day, e.g. `/limits 6 30`. |
 | `/queue` | What's queued, waiting on answers, applied or failed. |
 | `/status` | Mode, today's count, and whether anything is paused. |
 | `/pause`, `/resume` | Stop or restart submissions. Searching continues. |

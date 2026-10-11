@@ -321,3 +321,17 @@ def test_login_qr_replaces_the_previous_one_and_is_cleared_at_the_end(setup, tg)
     assert db.get_state(notifier.QR_MSG_KEY) is None
     notifier.clear_login_qr()                       # nothing left: no extra calls
     assert len(tg.sent("deleteMessage")) == 2
+
+
+def test_limits_command_shows_and_sets_caps(setup, tg):
+    from mcf_autoapply.overrides import apply_overrides
+    cfg, db, notifier, _, _ = setup
+    tg.pending_updates += [msg(1, "/limits"), msg(2, "/limits 6 30"), msg(3, "/limits 99 1")]
+    notifier.handle_updates()
+    texts = [b["text"] for b in tg.sent()]
+    assert "Current limits" in texts[0] and "/limits 6 30" in texts[0]
+    assert "6/hour, 30/day" in texts[1]
+    assert texts[2].startswith("Can't set that")
+    cfg.apply.hourly_cap, cfg.apply.daily_cap, cfg.apply.ramp = 4, 15, [15, 25, 40]
+    apply_overrides(cfg, db)
+    assert (cfg.apply.hourly_cap, cfg.apply.daily_cap, cfg.apply.ramp) == (6, 30, [])

@@ -206,4 +206,4 @@ serve:
 discovery:
   page_size: 100
   max_pages: 5                        # per search term, per run
-  requests_per_second: 1
+  requests_per_second: 2
