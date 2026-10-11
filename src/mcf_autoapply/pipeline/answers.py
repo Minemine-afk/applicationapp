@@ -51,7 +51,7 @@ class AnswerBank:
         self.path = Path(path)
         self.entries: list[Entry] = []
         if self.path.exists():
-            data = yaml.safe_load(self.path.read_text()) or []
+            data = yaml.safe_load(self.path.read_text(encoding="utf-8")) or []
             for i, item in enumerate(data):
                 try:
                     self.entries.append(Entry(str(item["question"]).strip(),
@@ -91,4 +91,4 @@ class AnswerBank:
             [{"question": e.question, "answer": e.answer} for e in self.entries],
             sort_keys=False, allow_unicode=True, width=1000,
         )
-        self.path.write_text(HEADER + "\n" + body)
+        self.path.write_text(HEADER + "\n" + body, encoding="utf-8")

@@ -218,7 +218,7 @@ class Applier:
         shot = self._screenshot("failed")
         if shot:   # keep the HTML too, for fixing selectors
             try:
-                Path(shot).with_suffix(".html").write_text(self.page.content())
+                Path(shot).with_suffix(".html").write_text(self.page.content(), encoding="utf-8")
             except PlaywrightError:
                 pass
         return Outcome(Q.FAILED, detail, shot)

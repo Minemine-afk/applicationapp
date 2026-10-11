@@ -119,7 +119,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         raise FileNotFoundError(
             f"{path} not found. Copy config.example.yml to config.yml and edit it."
         )
-    data = yaml.safe_load(path.read_text()) or {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     cfg = Config.model_validate(data)
     # Resolve relative paths against the config file, not the current directory.
     base = path.parent

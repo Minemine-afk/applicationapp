@@ -224,3 +224,12 @@ def test_repeated_failures_pause_and_retries_are_capped(tmp_path, db, job_factor
     db.conn.execute("UPDATE applications SET attempts = ?", (Q.MAX_ATTEMPTS,))
     assert A.pending(db, dry_run=False) == [
         r for r in db.applications([Q.APPROVED])]   # failed jobs at the cap drop out
+
+
+def test_answer_bank_keeps_non_ascii_text(tmp_path):
+    bank = AnswerBank(tmp_path / "answers.yml")
+    bank.add("Are you comfortable with “on-call” rotations — including weekends?", "yes")
+    raw = (tmp_path / "answers.yml").read_bytes().decode("utf-8")   # written as UTF-8
+    assert "“on-call”" in raw
+    assert AnswerBank(tmp_path / "answers.yml").lookup(
+        "Are you comfortable with “on-call” rotations — including weekends?") == "yes"

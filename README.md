@@ -157,6 +157,8 @@ Logging in is the one manual step. When MCF's login expires you get a Telegram a
 
 ### Option A: a computer with a screen (old laptop or desktop)
 
+**On Windows, follow [docs/WINDOWS.md](docs/WINDOWS.md)**, a step-by-step guide.
+
 Install as in Setup, then leave this running:
 
 ```bash
