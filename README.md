@@ -110,6 +110,11 @@ with `/newbot`), saves it in your user environment (never in `config.yml`), turn
 installs the browser, and links your chat when you press **Start** on the bot. On Windows it
 also makes mcf-apply start when you log in. Then keep `mcf-apply serve` running (see Home server).
 
+Commands come first: `/status`, `/queue` and the rest are answered at once, and `/login`,
+`/run`, `/apply`, `/update` and `/restart` stop a search or application round in progress
+between jobs (never mid-form) and take over; the interrupted round continues afterwards. Only
+a login in progress is waited out, since it's waiting on you.
+
 | Command | What it does |
 |---|---|
 | `/login` | Singpass QR with an **Open in Singpass app** button; fresh QRs every minute until approved |

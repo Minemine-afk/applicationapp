@@ -32,8 +32,22 @@ def styled_state(state: str) -> str:
     return f"[{style}]{state:<15}[/{style}]"
 
 
+Stop = Callable[[], bool] | None   # "a Telegram command wants the worker": stop between jobs
+
+
+def _sleeper(stop: Stop):
+    """time.sleep that ends early when `stop()` turns true (checked every second)."""
+    def sleep(seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if stop and stop():
+                return
+            time.sleep(min(1.0, end - time.monotonic()))
+    return sleep
+
+
 def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
-                headless: bool | None, log: Log):
+                headless: bool | None, log: Log, stop: Stop = None):
     """Apply to queued jobs in a browser. Returns the RunResult, or None if nothing queued."""
     from mcf_autoapply.jobstreet.applier import JobStreetApplier
     from mcf_autoapply.mcf.applier import Applier
@@ -71,7 +85,8 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
                                         cfg.jobstreet.resume_name, not live)
             return Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live)
 
-        result = A.run(cfg, db, applier_for, dry_run=not live, limit=limit, on_outcome=show)
+        result = A.run(cfg, db, applier_for, dry_run=not live, limit=limit, on_outcome=show,
+                       should_stop=stop, sleep=_sleeper(stop))
     result.skipped_applied = skipped
     if result.stopped:
         log(f"[yellow]Stopped: {result.stopped}[/yellow]")
@@ -103,6 +118,10 @@ def idle_reason(cfg: Config, db: Database, result) -> str | None:
     return "nothing was attempted"
 
 
+def found_nothing_because_interrupted(reason: str) -> bool:
+    return reason.startswith("interrupted")
+
+
 def record_run(cfg: Config, db: Database, notifier: Notifier, result, kind: str = "run",
                new_passed: int = 0, auto_approved: int = 0) -> str | None:
     """Remember what the last run did (for /status) and say why nothing was applied, once."""
@@ -120,7 +139,7 @@ def record_run(cfg: Config, db: Database, notifier: Notifier, result, kind: str 
         "idle_reason": reason,
     }))
     db.commit()
-    if reason and not (result and result.stopped):   # stops are reported by report_stop
+    if reason and not (result and result.stopped) and not found_nothing_because_interrupted(reason):
         key = f"idle:{cfg.apply.mode}:" + reason.split(":")[0].split(" (")[0]
         notifier.alert(key, f"Nothing applied: {reason}.")
     return reason
@@ -140,13 +159,13 @@ def finish_notifications(notifier: Notifier, result, log: Log, new_passed: int =
 
 
 def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
-             headless: bool | None = True, handle_taps: bool = True) -> None:
+             headless: bool | None = True, handle_taps: bool = True, stop: Stop = None) -> None:
     apply_overrides(cfg, db)   # e.g. /mode set from Telegram
     if handle_taps:
         for done in notifier.handle_updates():   # taps since the last run
             log(f"Telegram: {done}")
     with MCFClient(cfg.discovery.requests_per_second) as client:
-        found = discover(cfg, db, client)
+        found = discover(cfg, db, client, should_stop=stop)
         log(f"Discovered {len(found.new_uuids)} new, {len(found.new_passed)} passed filters.")
         for problem in found.problems:
             log(f"[yellow]{problem}[/yellow]")
@@ -157,7 +176,10 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
             + (f"  [dim]{d.note}[/dim]" if d.note else ""))
     notifier.send_question_cards()
     notifier.send_review_cards()
-    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log)
+    if stop and stop():
+        log("[yellow]Run interrupted by a Telegram command before applying.[/yellow]")
+        return
+    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop)
     finish_notifications(notifier, result, log, len(found.new_passed),
                          sum(d.state == Q.APPROVED for d in decisions), cfg=cfg, db=db)
 
@@ -185,10 +207,10 @@ def sync_applied_jobs(page, db: Database, log: Log, site: str = "mcf") -> list[s
 
 
 def apply_only(cfg: Config, db: Database, notifier: Notifier, log: Log,
-               headless: bool | None = True) -> None:
+               headless: bool | None = True, stop: Stop = None) -> None:
     """Apply to what's already queued, without searching first (/apply)."""
     apply_overrides(cfg, db)
-    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log)
+    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop)
     finish_notifications(notifier, result, log, cfg=cfg, db=db, kind="apply")
 
 
@@ -327,6 +349,9 @@ class TaskRunner:
     application round or login is in progress. Each task is queued at most once.
     """
 
+    # Tasks a Telegram command may cut short (they stop between jobs and resume later).
+    PREEMPTIBLE = ("run", "apply")
+
     def __init__(self, handlers: dict[str, Callable[[], None]], log: Log,
                  background: bool = True) -> None:
         self.handlers = handlers
@@ -335,9 +360,21 @@ class TaskRunner:
         self._queue: list[str] = []
         self._lock = threading.Lock()
         self._wake = threading.Event()
+        self.interrupt = threading.Event()   # set: the running task should stop between jobs
         self._background = background
         if background:
             threading.Thread(target=self._loop, daemon=True, name="mcf-tasks").start()
+
+    def should_stop(self) -> bool:
+        return self.interrupt.is_set()
+
+    def wait_idle(self, timeout: float) -> bool:
+        """Ask the running task to stop and wait for the worker to go idle."""
+        self.interrupt.set()
+        end = time.monotonic() + timeout
+        while self.current is not None and time.monotonic() < end:
+            time.sleep(0.2)
+        return self.current is None
 
     @property
     def busy(self) -> bool:
@@ -349,16 +386,24 @@ class TaskRunner:
         with self._lock:
             return self.current or (self._queue[0] if self._queue else None)
 
-    def submit(self, name: str, first: bool = False) -> str:
-        """Queue a task. Returns "started", "queued" (after another task) or "already".
+    def submit(self, name: str, first: bool = False, preempt: bool = False) -> str:
+        """Queue a task. Returns "started", "queued" (after another task), "preempting" (the
+        running task is being stopped so this one can go first) or "already".
 
-        `first` puts it ahead of other queued tasks (it still waits for the running one).
+        `first` puts it ahead of other queued tasks. `preempt` (Telegram commands) also stops
+        a running search/apply round between jobs; the stopped task is re-queued after it.
+        A login in progress is never cut short: it's waiting on you.
         """
         with self._lock:
             if name == self.current or name in self._queue:
                 return "already"
             state = "queued" if self.busy else "started"
-            if first:
+            if preempt and self.current in self.PREEMPTIBLE:
+                self.interrupt.set()
+                state = "preempting"
+                if self.current not in self._queue:
+                    self._queue.append(self.current)   # finish it after the command's task
+            if first or preempt:
                 self._queue.insert(0, name)
             else:
                 self._queue.append(name)
@@ -380,6 +425,7 @@ class TaskRunner:
                 if not self._queue or (not self._background and self.current):
                     return
                 self.current = self._queue.pop(0)
+                self.interrupt.clear()
             try:
                 self.handlers[self.current]()
             except Exception as e:   # a failed task must never stop the service
@@ -424,7 +470,8 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
     def run_task() -> None:
         with worker_notifier() as (wdb, wn):
             try:
-                (run or (lambda: run_once(cfg, wdb, wn, log, handle_taps=False)))()
+                (run or (lambda: run_once(cfg, wdb, wn, log, handle_taps=False,
+                                          stop=tasks.should_stop)))()
             except Exception as e:   # a bad run must never stop the service
                 log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
                 wn.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
@@ -432,7 +479,7 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
     def apply_task() -> None:
         with worker_notifier() as (wdb, wn):
             try:
-                apply_only(cfg, wdb, wn, log)
+                apply_only(cfg, wdb, wn, log, stop=tasks.should_stop)
             except Exception as e:
                 log(f"[red]Apply failed: {e}[/red]\n{traceback.format_exc()}")
                 wn.alert("run_error", f"Applying failed: {type(e).__name__}: {e}")
@@ -458,49 +505,55 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         if ok:
             tasks.submit("run")
 
-    def update_task() -> None:
+    tasks = TaskRunner({"run": run_task, "apply": apply_task, "login": login_task}, log,
+                       background)
+
+    def stop_worker_then(what: str) -> None:
+        """Stop the running task between jobs (so no half-finished application) before
+        restarting. Logins are waited out for a minute at most."""
+        if tasks.current is not None:
+            notifier._send(f"Stopping {ACTIVITY.get(tasks.current, 'the current task')} first…")
+            if not tasks.wait_idle(90 if tasks.current in TaskRunner.PREEMPTIBLE else 60):
+                notifier._send(f"It didn't stop in time; {what} anyway.")
+
+    def update_cmd(args: str) -> None:
+        # Done right here, ahead of everything else: a /update should never wait on a run.
         from mcf_autoapply import updater
 
-        with worker_notifier() as (wdb, wn):
-            summary, pulled = (do_update or (lambda: updater.run_update(cfg.project_dir)))()
-            log(summary)
-            wn._send(summary)
-            if pulled:
-                wn._send("♻️ Restarting: the start script reinstalls the app, then starts it. "
-                         "Back in a minute or two (\"🟢 mcf-apply is running\" means it worked).")
-            else:
-                wn._send("Not restarting, since nothing was pulled. Fix the problem above (or "
-                         "send /restart to restart anyway).")
-        if pulled:
-            (do_restart or updater.restart)()
+        notifier._send("Checking for an update…")
+        summary, pulled = (do_update or (lambda: updater.run_update(cfg.project_dir)))()
+        log(summary)
+        notifier._send(summary)
+        if not pulled:
+            notifier._send("Not restarting, since nothing was pulled. Fix the problem above (or "
+                           "send /restart to restart anyway).")
+            return
+        stop_worker_then("restarting")
+        notifier._send("♻️ Restarting: the start script reinstalls the app, then starts it. "
+                       "Back in a minute or two (\"🟢 mcf-apply is running\" means it worked).")
+        (do_restart or updater.restart)()
 
-    def restart_task() -> None:
-        with worker_notifier() as (wdb, wn):
-            wn._send("♻️ Restarting. Back in about a minute.")
+    def restart_cmd(args: str) -> None:
+        stop_worker_then("restarting")
+        notifier._send("♻️ Restarting. Back in about a minute.")
         (do_restart or __import__("mcf_autoapply.updater").updater.restart)()
-
-    tasks = TaskRunner({"run": run_task, "apply": apply_task, "login": login_task,
-                        "update": update_task, "restart": restart_task}, log, background)
-
-    def update_cmd(args: str) -> str:
-        return {"started": "Checking for an update…",
-                "queued": "The update will start as soon as the current task finishes.",
-                "already": "An update is already in progress."}[tasks.submit("update", first=True)]
-
-    def restart_cmd(args: str) -> str | None:
-        return {"started": None, "queued": "Restarting as soon as the current task finishes.",
-                "already": "Already restarting."}[tasks.submit("restart", first=True)]
 
     def run_cmd(args: str) -> str:
         return {"started": "Starting a run now (search, then apply). Results arrive here "
                            "when it's done. /apply skips the search.",
-                "queued": "A run will start as soon as the current task finishes.",
-                "already": "A run is already in progress or queued."}[tasks.submit("run")]
+                "preempting": f"Stopping {ACTIVITY.get(tasks.current, 'the current task')} "
+                              "to start a run now; the rest of that round follows after.",
+                "queued": f"A run will start as soon as {ACTIVITY.get(tasks.current, 'the current task')} finishes.",
+                "already": "A run is already in progress or queued."}[
+                    tasks.submit("run", preempt=True)]
 
     def apply_cmd(args: str) -> str:
         return {"started": "Applying to the queue now, no search first.",
-                "queued": "Applying will start as soon as the current task finishes.",
-                "already": "Applying is already in progress or queued."}[tasks.submit("apply")]
+                "preempting": f"Stopping {ACTIVITY.get(tasks.current, 'the current task')} "
+                              "to apply now; the rest of that round follows after.",
+                "queued": f"Applying will start as soon as {ACTIVITY.get(tasks.current, 'the current task')} finishes.",
+                "already": "Applying is already in progress or queued."}[
+                    tasks.submit("apply", preempt=True)]
 
     def login_cmd(args: str) -> str | None:
         site = args.strip().lower() or "mcf"
@@ -515,9 +568,10 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         login_site["site"] = site
         busy = ACTIVITY.get(tasks.current, "the current task")
         return {"started": None,   # the login task sends its own messages
+                "preempting": f"Stopping {busy} so you can log in now; it continues afterwards.",
                 "queued": f"The login will start as soon as {busy} finishes; it's next in line.",
                 "already": "A login is already in progress or queued."}[
-                    tasks.submit("login", first=True)]
+                    tasks.submit("login", preempt=True)]
 
     commands = {"/run": run_cmd, "/apply": apply_cmd, "/login": login_cmd,
                 "/update": update_cmd, "/restart": restart_cmd}

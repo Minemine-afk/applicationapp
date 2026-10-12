@@ -139,7 +139,8 @@ def test_telegram_answers_while_a_long_run_is_in_progress(cfg, db, tg):
     assert real_time.monotonic() - t0 < 5          # answered without waiting for the run
     assert any("⏳ Busy: searching and applying" in t for t in texts)
     assert "A run is already in progress or queued." in texts
-    assert any("next in line" in t for t in texts)   # login is queued ahead of other tasks
+    # /login doesn't wait: the run is told to stop between jobs and resumes afterwards.
+    assert any("Stopping searching and applying so you can log in now" in t for t in texts)
     release.set()
 
     # One task at a time, in order, each queued once.
@@ -177,3 +178,49 @@ def test_apply_command_skips_search_and_login_jumps_the_queue(cfg, db, tg):
         R.apply_only = original
     assert applied == [1]
     assert any(t.startswith("Applying to the queue now") for t in [b["text"] for b in tg.sent()])
+
+
+def test_telegram_tasks_preempt_a_running_round_which_resumes_after():
+    from mcf_autoapply.runner import TaskRunner
+    order = []
+    tasks = TaskRunner({"run": lambda: order.append("run"), "apply": lambda: order.append("apply"),
+                        "login": lambda: order.append("login")}, lambda m: None, background=False)
+    tasks.current = "run"                               # the hourly round is mid-way
+    assert tasks.submit("login", preempt=True) == "preempting"
+    assert tasks.should_stop()                          # the round stops between jobs
+    assert tasks._queue == ["login", "run"]             # login first, the round resumes after
+    assert tasks.submit("apply", preempt=True) == "preempting"
+    assert tasks._queue == ["apply", "login", "run"]
+    tasks.current = None
+    tasks._drain()
+    assert order == ["apply", "login", "run"] and not tasks.should_stop()
+
+    # A login in progress is never cut short: it's waiting on the user.
+    tasks.current = "login"
+    assert tasks.submit("run", preempt=True) == "queued" and not tasks.should_stop()
+
+
+def test_apply_round_stops_between_jobs_when_asked(tmp_path, job_factory):
+    from test_apply_flow import add_jobs, approve_all, make_cfg
+    from mcf_autoapply.pipeline import apply as A
+    from mcf_autoapply.mcf.applier import Outcome
+    from mcf_autoapply.pipeline import queue as Q
+
+    from datetime import time as dtime
+
+    cfg = make_cfg(tmp_path, mode="manual")
+    cfg.apply.active_hours = (dtime(0, 0), dtime(23, 59, 59))   # the pacer uses the real clock
+    db = Database(":memory:")
+    approve_all(db, cfg, add_jobs(db, cfg, job_factory, 3))
+    calls = []
+
+    class FakeApplier:
+        def apply(self, uuid, url, questions, answers):
+            calls.append(uuid)
+            return Outcome(Q.APPLIED)
+
+    stop_after = 1
+    result = A.run(cfg, db, lambda s: FakeApplier(), dry_run=False, sleep=lambda s: None,
+                   should_stop=lambda: len(calls) >= stop_after)
+    assert len(calls) == 1 and result.stopped == A.INTERRUPTED
+    assert len(A.pending(db, dry_run=False)) == 2      # the rest waits for the next round

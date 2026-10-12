@@ -18,6 +18,7 @@ from mcf_autoapply.pipeline.pacer import Pacer
 from mcf_autoapply.sources import source_of
 
 DRY_RUN_DELAY_S = (3, 8)
+INTERRUPTED = "interrupted by your Telegram command; the rest of the queue waits for the next run"
 
 
 @dataclass
@@ -48,10 +49,12 @@ def run(
     cfg: Config, db: Database, applier_factory: Callable[..., Applier], dry_run: bool,
     limit: int | None = None, sleep: Callable[[float], None] = time.sleep,
     pacer: Pacer | None = None, on_outcome: Callable[[str, Outcome], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> RunResult:
     """Apply to the queue. `applier_factory(source)` gives the applier for a site (older
     factories take no argument). A site that logs us out or hits its cap is skipped for the
-    rest of the run while the other continues."""
+    rest of the run while the other continues. `should_stop()` is checked between jobs so a
+    Telegram command can take over; the rest of the queue waits for the next run."""
     if cfg.apply.mode == "dry_run":
         dry_run = True   # live submission needs apply.mode set to manual or auto
     pacer = pacer or Pacer(cfg.apply, db, site_caps=site_caps(cfg))
@@ -70,6 +73,9 @@ def run(
     stopped_sites: dict[str, str] = {}
     first = True
     for app in jobs:
+        if should_stop and should_stop():
+            result.stopped = INTERRUPTED
+            break
         source = source_of(app["job_uuid"])
         if source in stopped_sites:
             continue
@@ -81,6 +87,9 @@ def run(
             break
         if not first:
             sleep(random.uniform(*DRY_RUN_DELAY_S) if dry_run else pacer.delay_seconds())
+            if should_stop and should_stop():
+                result.stopped = INTERRUPTED
+                break
         first = False
         if source not in appliers:
             try:

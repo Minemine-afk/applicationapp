@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -35,11 +36,12 @@ class DiscoveryResult:
 
 def discover(
     cfg: Config, db: Database, client=None, today: date | None = None,
-    sources: dict[str, Source] | None = None,
+    sources: dict[str, Source] | None = None, should_stop: Callable[[], bool] | None = None,
 ) -> DiscoveryResult:
     """Search every enabled site for every saved search, store new jobs, then filter.
 
     `client` is an MCF client (kept for older callers); `sources` overrides the registry.
+    `should_stop()` is checked between search terms so a Telegram command can take over.
     """
     today = today or date.today()
     cutoff = today - timedelta(days=cfg.filters.max_age_days)
@@ -56,6 +58,10 @@ def discover(
                 if src is None or name not in enabled or name in skip:
                     continue
                 for term in search.terms():
+                    if should_stop and should_stop():
+                        result.problems.append("search interrupted by your Telegram command")
+                        skip.update(sources)
+                        break
                     tr = TermResult(term, source=name)
                     result.terms.append(tr)
                     try:
