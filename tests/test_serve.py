@@ -352,3 +352,17 @@ def test_run_and_apply_take_a_site(cfg, db, tg):
     assert any(t.startswith("Starting a run on JobStreet now") for t in texts)
     assert any(t.startswith("Applying to the queue on MCF now") for t in texts)
     assert "Use /run, /run mcf or /run jobstreet." in texts
+
+
+def test_your_commands_queue_behind_each_other_instead_of_interrupting():
+    """/run then /apply stopped the run you'd just started; now /apply waits for it."""
+    from mcf_autoapply.runner import TaskRunner
+    tasks = TaskRunner({n: (lambda: None) for n in ("run", "apply", "run_mcf")}, lambda m: None,
+                       background=False)
+    tasks.current = "run_mcf"                                   # the hourly round
+    assert tasks.submit("run", preempt=True) == "preempting"    # your /run goes first
+    tasks.interrupt.clear()
+    tasks._queue.remove("run")
+    tasks.current = "run"                                       # now your /run is running
+    assert tasks.submit("apply", preempt=True) == "queued"      # /apply waits its turn
+    assert not tasks.should_stop()

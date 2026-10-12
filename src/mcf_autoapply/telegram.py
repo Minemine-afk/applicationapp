@@ -67,7 +67,13 @@ class TelegramAPI:
                   parse_mode="HTML", disable_web_page_preview=True)
 
     def answer_callback(self, callback_id: str, text: str = "") -> None:
-        self.call("answerCallbackQuery", callback_query_id=callback_id, text=text)
+        try:
+            self.call("answerCallbackQuery", callback_query_id=callback_id, text=text)
+        except TelegramError as e:
+            # A tap handled after a busy spell is past Telegram's 15 s window to answer it.
+            # The tap itself was still processed, so there's nothing to report.
+            if "query is too old" not in str(e):
+                raise
 
     def updates(self, offset: int | None = None, timeout: int = 0) -> list[dict]:
         return self.call("getUpdates", offset=offset, timeout=timeout,

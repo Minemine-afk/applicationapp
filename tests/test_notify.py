@@ -401,3 +401,26 @@ def test_jobstreet_non_submissions_send_the_screenshot_and_page(setup, tg, tmp_p
     docs = [b["multipart"] for b in tg.sent("sendDocument")]
     assert len(photos) == 1 and "Employer's own site · JobStreet" in photos[0]   # MCF: no picture
     assert len(docs) == 1 and "x-js-1-external.html" in docs[0] and "<html>job</html>" in docs[0]
+
+
+def test_expired_mcf_login_found_by_the_sync_is_alerted(setup, tg):
+    from mcf_autoapply.runner import finish_notifications, sync_applied_jobs
+
+    cfg, db, notifier, _, _ = setup
+
+    class LoggedOutPage:
+        pass
+
+    import mcf_autoapply.mcf.applied as applied
+    original = applied.sync_applied
+
+    def boom(page, db):
+        raise applied.AppliedSyncError("not logged in")
+    applied.sync_applied = boom
+    try:
+        sync_applied_jobs(LoggedOutPage(), db, lambda m: None, "mcf")
+    finally:
+        applied.sync_applied = original
+    finish_notifications(notifier, None, lambda m: None, cfg=cfg, db=db)
+    assert any("MCF login expired" in b["text"] for b in tg.sent())
+    assert "MCF login expired: send /login" in notifier.status_text()

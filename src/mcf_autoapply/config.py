@@ -78,7 +78,7 @@ class Apply(_Strict):
     active_hours: tuple[time, time] = (time(8, 0), time(22, 0))
     timezone: str = "Asia/Singapore"
     delay_seconds: tuple[float, float] = (45, 120)
-    max_failures_per_hour: int = Field(2, ge=1)
+    max_failures_per_hour: int = Field(3, ge=1)   # per site
     browser_profile: Path = Path("./data/browser-profile")
     browser_executable: Path | None = None
     # Prefer the real Google Chrome installed on the PC ("chrome"; "msedge" also works) over

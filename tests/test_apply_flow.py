@@ -212,10 +212,10 @@ def test_captcha_pauses_and_logout_stops(tmp_path, db, job_factory):
 
     result = A.run(cfg, db, lambda: FakeApplier([Outcome(CAPTCHA)]),
                    dry_run=False, sleep=lambda s: None, pacer=pacer)
-    assert "CAPTCHA" in result.stopped and pacer.paused()
+    assert "CAPTCHA" in result.stopped and pacer.paused("mcf") and not pacer.paused()
     result = A.run(cfg, db, lambda: FakeApplier([]), dry_run=False, sleep=lambda s: None,
                    pacer=pacer)
-    assert "paused" in result.stopped and result.outcomes == []
+    assert "mcf paused" in result.stopped and result.outcomes == []
 
 
 def test_repeated_failures_pause_and_retries_are_capped(tmp_path, db, job_factory):
@@ -246,3 +246,23 @@ def test_get_env_prefers_process_env_and_handles_missing(monkeypatch):
     assert get_env("MCF_TEST_TOKEN") == "abc"
     monkeypatch.delenv("MCF_TEST_TOKEN")
     assert get_env("MCF_TEST_TOKEN") is None
+
+
+def test_failures_pause_only_their_site_and_resume_starts_the_count_afresh(tmp_path, db, job_factory):
+    """Two JobStreet failures used to pause MCF too, and /resume was undone by the next failure
+    because the failures from before it still counted."""
+    cfg = make_cfg(tmp_path, max_failures_per_hour=2)
+    pacer = live_pacer(cfg, db)
+    for _ in range(2):
+        db.log(None, "application_failed", {"source": "jobstreet"})
+    db.commit()
+    assert pacer.record_failure("jobstreet") is True
+    assert "jobstreet paused" in pacer.blocked_reason("jobstreet")
+    assert pacer.blocked_reason("mcf") is None and pacer.blocked_reason() is None
+    pacer.unpause()
+    assert pacer.blocked_reason("jobstreet") is None
+    import time as _t
+    _t.sleep(1.1)                                       # a failure after resuming
+    db.log(None, "application_failed", {"source": "jobstreet"})
+    db.commit()
+    assert pacer.record_failure("jobstreet") is False   # 1 since resuming, not 3

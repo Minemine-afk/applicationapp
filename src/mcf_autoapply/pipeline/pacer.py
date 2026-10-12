@@ -15,6 +15,7 @@ APPLIED_EVENT = "application_applied"
 FAILED_EVENT = "application_failed"
 PAUSE_KEY = "paused"
 RAMP_START_KEY = "ramp_start"
+UNPAUSED_KEY = "unpaused_at"
 
 
 class Pacer:
@@ -79,8 +80,9 @@ class Pacer:
 
     def blocked_reason(self, source: str | None = None) -> str | None:
         """Why no submission may happen right now, or None if one may."""
-        if paused := self.paused():
-            return f"paused: {paused['reason']} (run `mcf-apply unpause` once resolved)"
+        if paused := self.paused(source):
+            who = f"{paused['source']} " if paused.get("source") else ""
+            return f"{who}paused: {paused['reason']} (send /resume once resolved)"
         start, end = self.rules.active_hours
         if not start <= self.now().time() < end:
             return f"outside active hours ({start:%H:%M}–{end:%H:%M} {self.rules.timezone})"
@@ -102,27 +104,49 @@ class Pacer:
 
     # --- pausing --------------------------------------------------------------------------
 
-    def paused(self) -> dict | None:
-        value = self.db.get_state(PAUSE_KEY)
-        return json.loads(value) if value else None
+    def paused(self, source: str | None = None) -> dict | None:
+        """The pause in force: everything (/pause), or for one site (its failures, a CAPTCHA)."""
+        for key in ([PAUSE_KEY] + ([f"{PAUSE_KEY}:{source}"] if source else [])):
+            if value := self.db.get_state(key):
+                return json.loads(value)
+        return None
 
-    def pause(self, reason: str) -> None:
-        self.db.set_state(PAUSE_KEY, json.dumps({"reason": reason, "at": self.now().isoformat()}))
-        self.db.log(None, "paused", {"reason": reason})
+    def site_pauses(self) -> dict[str, dict]:
+        rows = self.db.conn.execute("SELECT key, value FROM state WHERE key LIKE ?",
+                                    (f"{PAUSE_KEY}:%",)).fetchall()
+        return {r["key"].split(":", 1)[1]: json.loads(r["value"]) for r in rows if r["value"]}
+
+    def pause(self, reason: str, source: str | None = None) -> None:
+        key = f"{PAUSE_KEY}:{source}" if source else PAUSE_KEY
+        self.db.set_state(key, json.dumps({"reason": reason, "at": self.now().isoformat(),
+                                           "source": source}))
+        self.db.log(None, "paused", {"reason": reason, "source": source})
         self.db.commit()
 
     def unpause(self) -> None:
-        # The ramp restarts from its first step after a pause.
+        """Lift every pause. Failures before this moment no longer count towards a new one."""
         self.db.set_state(PAUSE_KEY, None)
+        for site in self.site_pauses():
+            self.db.set_state(f"{PAUSE_KEY}:{site}", None)
+        self.db.set_state(UNPAUSED_KEY, self.now().isoformat())
+        # The ramp restarts from its first step after a pause.
         self.db.set_state(RAMP_START_KEY, self.now().isoformat())
         self.db.log(None, "unpaused")
         self.db.commit()
 
-    def record_failure(self) -> bool:
-        """Pause if failures in the last hour hit the limit. Returns True if it paused."""
-        recent = self.db.count_events(FAILED_EVENT, self.now() - timedelta(hours=1))
+    def record_failure(self, source: str | None = None) -> bool:
+        """Pause that site if its failures this past hour (since the last resume) hit the
+        limit; the other site carries on. Returns True if it paused."""
+        since = self.now() - timedelta(hours=1)
+        if value := self.db.get_state(UNPAUSED_KEY):
+            # Events are stamped to the second: round up so ones just before don't count.
+            resumed = datetime.fromisoformat(value)
+            if resumed.microsecond:
+                resumed = resumed.replace(microsecond=0) + timedelta(seconds=1)
+            since = max(since, resumed)
+        recent = self.db.count_events(FAILED_EVENT, since, source)
         if recent >= self.rules.max_failures_per_hour:
-            self.pause(f"{recent} failed submissions in the last hour")
+            self.pause(f"{recent} failed submissions in the last hour", source)
             return True
         return False
 

@@ -227,6 +227,9 @@ def finish_notifications(notifier: Notifier, result, log: Log, new_passed: int =
     notifier.run_summary(new_passed, auto_approved, result)
     notifier.report_stop(result.stopped if result else None)
     notifier.send_question_cards()   # questions found inside forms during this run
+    if db is not None and db.get_state("mcf:login") == "out":
+        notifier.alert("logged_out", "MCF login expired. Send /login and approve it in the "
+                                     "Singpass app.")
     if cfg is not None and db is not None:
         if reason := record_run(cfg, db, notifier, result, kind, new_passed, auto_approved):
             log(f"[yellow]Nothing applied: {reason}[/yellow]")
@@ -291,11 +294,16 @@ def sync_applied_jobs(page, db: Database, log: Log, site: str = "mcf") -> list[s
         result = sync_applied(page, db)
     except AppliedSyncError as e:
         log(f"[yellow]Couldn't read {name}'s applied jobs ({e}); using what's known.[/yellow]")
+        if "not logged in" in str(e):
+            db.set_state(f"{site}:login", "out")   # finish_notifications alerts about it
+            db.commit()
         return []
     except Exception as e:
         log(f"[yellow]{name} applied-jobs sync failed: {type(e).__name__}: {e}[/yellow]")
         return []
     log(f"{name} lists {result.total} application(s); {result.new} new to us.")
+    db.set_state(f"{site}:login", "in")
+    db.commit()
     return result.released
 
 
@@ -357,6 +365,7 @@ def login(cfg: Config, log: Log, notifier: Notifier | None = None,
         persisted = is_logged_in(page)
     if persisted:
         tell("💾 Login saved: it survives reopening the browser.")
+        _remember_login(cfg, "mcf")
     else:
         tell("⚠️ Logged in, but the login did not survive reopening the browser. "
              "Runs will report logged_out. Please tell the developer.")
@@ -472,6 +481,7 @@ class TaskRunner:
         self._wake = threading.Event()
         self.interrupt = threading.Event()   # set: the running task should stop between jobs
         self.progress = Progress()           # what the running task is doing, for /status
+        self._by_user: set[str] = set()      # tasks started by a Telegram command
         self._background = background
         if background:
             threading.Thread(target=self._loop, daemon=True, name="mcf-tasks").start()
@@ -506,14 +516,17 @@ class TaskRunner:
         running task is being stopped so this one can go first) or "already".
 
         `first` puts it ahead of other queued tasks. `preempt` (Telegram commands) also stops
-        a running search/apply round between jobs; the stopped task is re-queued after it.
-        A login in progress is never cut short: it's waiting on you.
+        a scheduled search/apply round between jobs; the stopped task is re-queued after it.
+        A task you started yourself is never cut short by your next command (send /run then
+        /apply and both happen, in that order), and neither is a login: it's waiting on you.
         """
         with self._lock:
             if name == self.current or name in self._queue:
                 return "already"
             state = "queued" if self.busy else "started"
-            if preempt and self.preemptible(self.current):
+            if preempt:
+                self._by_user.add(name)
+            if preempt and self.preemptible(self.current) and self.current not in self._by_user:
                 self.interrupt.set()
                 state = "preempting"
                 if self.current not in self._queue:
@@ -549,6 +562,8 @@ class TaskRunner:
             finally:
                 self.progress.clear()
                 with self._lock:
+                    if self.current not in self._queue:   # re-queued after an interruption
+                        self._by_user.discard(self.current)
                     self.current = None
 
 

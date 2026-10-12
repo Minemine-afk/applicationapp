@@ -176,6 +176,24 @@ def tighter_titles_2026_10_13b(cfg: Config, db: Database) -> list[str]:
                    f"{dropped} off-target auto-queued job(s) taken out of the queue"]
 
 
+def midnight_and_site_pauses_2026_10_13c(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat: apply until midnight. Failure pauses are now per site, so lift the
+    old all-sites pause (2 failures had stopped MCF and JobStreet alike)."""
+    from datetime import time
+
+    from mcf_autoapply.pipeline.pacer import Pacer
+
+    done = edit_config(cfg, [("apply", "active_hours", '["08:00", "23:59"]'),
+                             ("apply", "max_failures_per_hour", "3")])
+    cfg.apply.active_hours = (time(8, 0), time(23, 59))
+    cfg.apply.max_failures_per_hour = 3
+    pacer = Pacer(cfg.apply, db)
+    was = pacer.paused()
+    pacer.unpause()
+    return done + ["active hours 08:00–23:59; 3 failures on one site now pause only that site"
+                   + (f"; lifted the pause ({was['reason']})" if was else "")]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
@@ -184,6 +202,7 @@ PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12e-limits-20-170", limits_20_per_hour_2026_10_12e),
     ("2026-10-13-requeue-jobstreet", requeue_jobstreet_2026_10_13),
     ("2026-10-13b-tighter-titles", tighter_titles_2026_10_13b),
+    ("2026-10-13c-midnight-site-pauses", midnight_and_site_pauses_2026_10_13c),
 ]
 
 

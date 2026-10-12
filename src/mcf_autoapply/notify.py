@@ -668,7 +668,7 @@ class Notifier:
 
     def _cmd_resume(self, args: str) -> str:
         pacer = Pacer(self.cfg.apply, self.db)
-        if not pacer.paused():
+        if not pacer.paused() and not pacer.site_pauses():
             return "Not paused."
         pacer.unpause()
         return f"▶️ Resumed. Daily cap is {pacer.daily_cap()}."
@@ -767,6 +767,11 @@ class Notifier:
         lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]
         if reason := pacer.blocked_reason():
             lines.append(f"⏸ {escape(reason)}")
+        for site, p in pacer.site_pauses().items():
+            lines.append(f"⏸ {escape(LABELS.get(site, site))} paused: {escape(p['reason'])} "
+                         "(/resume once resolved)")
+        if self.db.get_state("mcf:login") == "out":
+            lines.append("🔒 MCF login expired: send /login")
         lines += self._last_run_lines()
         busy = (self.progress() if self.progress else None) or self.activity
         if busy:

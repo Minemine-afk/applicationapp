@@ -51,6 +51,11 @@ def _is_cap(reason: str) -> bool:
     return "cap reached" in reason
 
 
+def _site_level(reason: str, source: str) -> bool:
+    """A reason that stops only this site (its cap or its own pause), not the whole run."""
+    return _is_cap(reason) or reason.startswith(f"{source} paused")
+
+
 def order_for_run(jobs: list, jobstreet_slots: int | None) -> list:
     """JobStreet's few allowed jobs go first, then everything else by score.
 
@@ -113,7 +118,7 @@ def run(
         if source in stopped_sites:
             continue
         if not dry_run and (reason := pacer.blocked_reason(source)):
-            if _is_cap(reason):   # each site has its own caps: skip just this site
+            if _site_level(reason, source):   # this site's cap or pause: skip just this site
                 stopped_sites[source] = reason
                 continue
             result.stopped = reason
@@ -146,9 +151,10 @@ def run(
             db.commit()
             continue
         if outcome.state == CAPTCHA:
-            pacer.pause(f"CAPTCHA seen while applying to '{app['title']}'")
-            result.stopped = "paused: CAPTCHA (log in and check the site, then /resume)"
-            break
+            pacer.pause(f"CAPTCHA seen while applying to '{app['title']}'", source)
+            stopped_sites[source] = (f"{source} paused: CAPTCHA (log in and check the site, "
+                                     "then /resume)")
+            continue
         if outcome.state == Q.NEEDS_INPUT:
             Q.remember_question_options(db, outcome.questions or [])
             questions = [q["question"] for q in outcome.questions or []]
@@ -173,9 +179,8 @@ def run(
         db.update_application(app["job_uuid"], **fields)
         db.commit()
 
-        if outcome.state == Q.FAILED and not dry_run and pacer.record_failure():
-            result.stopped = "paused: too many failures in the last hour"
-            break
+        if outcome.state == Q.FAILED and not dry_run and pacer.record_failure(source):
+            stopped_sites[source] = f"{source} paused: too many failures in the last hour"
     if stopped_sites and not result.stopped:
         result.stopped = "; ".join(stopped_sites.values())
     return result

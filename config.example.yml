@@ -278,10 +278,10 @@ apply:
   hourly_cap: 20
   daily_cap: 170                      # hard ceiling (/limits in Telegram overrides these two)
   ramp: [85, 130, 170]                # daily cap steps up one level per week; restarts after a pause
-  active_hours: ["08:00", "22:00"]
+  active_hours: ["08:00", "23:59"]
   timezone: Asia/Singapore
   delay_seconds: [45, 100]            # random wait between submissions
-  max_failures_per_hour: 2            # more than this pauses submissions
+  max_failures_per_hour: 3            # this many on one site pauses that site only
   browser_profile: ./data/browser-profile   # keeps your MCF login between runs
   browser_channel: chrome             # use the PC's real Google Chrome (bot checks trust it more); "" = bundled
   headless: false                     # `mcf-apply run` is headless regardless
