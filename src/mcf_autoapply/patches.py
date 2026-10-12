@@ -93,9 +93,20 @@ def broader_search_2026_10_12b(cfg: Config, db: Database) -> list[str]:
     return done
 
 
+def experience_0_to_1_2026_10_12c(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat: only jobs asking for 0–1 years of experience."""
+    from mcf_autoapply.pipeline.discover import apply_filters
+
+    done = edit_config(cfg, [("filters", "max_years_experience_required", "1")])
+    cfg.filters.max_years_experience_required = 1
+    counts = apply_filters(db, cfg)
+    return done + [f"stored jobs re-filtered ({', '.join(f'{n} {k}' for k, n in counts.items())})"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
+    ("2026-10-12c-experience-0-1", experience_0_to_1_2026_10_12c),
 ]
 
 

@@ -361,3 +361,23 @@ def test_silent_run_explains_why_nothing_was_applied(setup, tg):
     result = RunResult(dry_run=False, outcomes=[("Job", Outcome(Q.APPLIED))])
     finish_notifications(notifier, result, lambda m: None, cfg=cfg, db=db)
     assert "1 applied" in notifier.status_text()
+
+
+def test_status_shows_submissions_per_hour_today(setup, tg):
+    """So an hour that applied nothing stands out (e.g. "11h 0")."""
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    from mcf_autoapply.pipeline.pacer import APPLIED_EVENT
+    cfg, db, notifier, _, _ = setup
+    tz = ZoneInfo(cfg.apply.timezone)
+    now = datetime.now(tz)
+    if now.hour < 3:
+        pytest.skip("too early in the day for a three-hour history")
+    for hours_ago, n in ((2, 2), (0, 1)):
+        for _ in range(n):
+            ts = (now - timedelta(hours=hours_ago)).astimezone(timezone.utc).isoformat(timespec="seconds")
+            db.conn.execute("INSERT INTO events (ts, type, payload) VALUES (?, ?, '{}')", (ts, APPLIED_EVENT))
+    db.commit()
+    text = notifier.status_text()
+    assert f"Per hour today: {now.hour - 2:02d}h 2 · {now.hour - 1:02d}h 0 · {now.hour:02d}h 1" in text

@@ -733,6 +733,8 @@ class Notifier:
             js = self.cfg.jobstreet
             lines.append(f"↳ of which JobStreet: today {pacer.applied_today('jobstreet')}/{js.daily_cap}"
                          f" · this hour {pacer.applied_this_hour('jobstreet')}/{js.hourly_cap}")
+        if per_hour := self._applied_per_hour_today(pacer):
+            lines.append("Per hour today: " + " · ".join(f"{h:02d}h {n}" for h, n in per_hour))
         lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]
         if reason := pacer.blocked_reason():
             lines.append(f"⏸ {escape(reason)}")
@@ -746,6 +748,20 @@ class Notifier:
             lines.append("\nℹ️ Dry run mode never submits. When the screenshots look right, "
                          "send /mode and pick ✋ Manual to start applying.")
         return "\n".join(lines)
+
+    def _applied_per_hour_today(self, pacer: Pacer) -> list[tuple[int, int]]:
+        """(hour, submissions) for each hour from the first submission today to now."""
+        from mcf_autoapply.pipeline.pacer import APPLIED_EVENT
+
+        now = pacer.now()
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        rows = self.db.conn.execute(
+            "SELECT ts FROM events WHERE type = ? AND ts >= ?",
+            (APPLIED_EVENT, midnight.astimezone(timezone.utc).isoformat(timespec="seconds"))).fetchall()
+        if not rows:
+            return []
+        hours = Counter(datetime.fromisoformat(r["ts"]).astimezone(pacer.tz).hour for r in rows)
+        return [(h, hours.get(h, 0)) for h in range(min(hours), now.hour + 1)]
 
     def _last_run_lines(self) -> list[str]:
         """What the last run did and, if it applied nothing, why (recorded by the runner)."""

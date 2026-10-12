@@ -74,7 +74,7 @@ searches:
 filters:
   max_age_days: 14                    # ignore postings older than this
   salary_min_monthly: 3500            # drop jobs whose top of range is below this (SGD)
-  max_years_experience_required: 3    # drop jobs asking for more than this
+  max_years_experience_required: 1    # drop jobs asking for more than this (0–1 years)
   employment_types: [Full Time, Permanent, Contract]   # empty list = any
   position_levels: []                 # e.g. [Executive, Senior Executive, Professional]
   # The title must contain at least one of these (whole words, case-insensitive).

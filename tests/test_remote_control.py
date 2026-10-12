@@ -194,7 +194,7 @@ def test_requested_settings_patch_runs_once(ctx, tmp_path):
     (tmp_path / "config.yml").write_text(text.replace("auto_apply_min_score: 55", "auto_apply_min_score: 70")
                                          .replace("delay_seconds: [45, 100]", "delay_seconds: [45, 120]"))
     report = apply_patches(cfg, db)
-    assert len(report) == 2 and "apply.auto_apply_min_score: 55" in report[0]
+    assert len(report) == 3 and "apply.auto_apply_min_score: 55" in report[0]
     new = (tmp_path / "config.yml").read_text()
     assert "auto_apply_min_score: 35\n" in new and "delay_seconds: [45, 100] " in new   # 2nd patch: 35
     assert "  enabled: true\n" in new.split("jobstreet:")[1]
@@ -210,17 +210,17 @@ def test_broader_search_patch_rewrites_sections_and_refilters(ctx, tmp_path, job
     cfg, db, _ = ctx
     cfg.project_dir = tmp_path
     example = Path(__file__).parents[1] / "config.example.yml"
-    old = example.read_text().replace("max_years_experience_required: 3", "max_years_experience_required: 2")
+    old = example.read_text().replace("max_years_experience_required: 1", "max_years_experience_required: 0")
     old = old[:old.index("searches:")] + 'searches:\n  - query: "old"\n\n' + old[old.index("filters:"):]
     (tmp_path / "config.yml").write_text(old)
     (tmp_path / "config.example.yml").write_text(example.read_text())
-    db.upsert_job(Job.from_api(job_factory(title="Cloud Engineer", minimumYearsExperience=3)), "x")
+    db.upsert_job(Job.from_api(job_factory(title="Cloud Engineer", minimumYearsExperience=1)), "x")
 
     report = apply_patches(cfg, db)
     assert any("broader-search" in r for r in report)
     new = (tmp_path / "config.yml").read_text()
     assert section_block(new, "searches") == section_block(example.read_text(), "searches")
-    assert "max_years_experience_required: 3" in new and "auto_apply_min_score: 35" in new
+    assert "max_years_experience_required: 1" in new and "auto_apply_min_score: 35" in new
     assert "- query: \"old\"" not in new
-    assert len(cfg.searches) == 7 and cfg.filters.max_years_experience_required == 3
-    assert db.jobs(["new"])[0]["title"] == "Cloud Engineer"   # 3 years now passes the filter
+    assert len(cfg.searches) == 7 and cfg.filters.max_years_experience_required == 1
+    assert db.jobs(["new"])[0]["title"] == "Cloud Engineer"   # 1 year passes the filter
