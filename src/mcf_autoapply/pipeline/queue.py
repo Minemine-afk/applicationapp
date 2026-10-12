@@ -106,12 +106,20 @@ def auto_approve(
     if cfg.apply.mode != "auto":
         return []
     picked = []
+    # JobStreet listings have no skills/experience fields and score lower, so their bar is the
+    # lower of the two thresholds.
+    js_threshold = min(cfg.apply.auto_apply_min_score, cfg.jobstreet.auto_min_score)
+    floor = js_threshold if cfg.jobstreet.allow_auto else cfg.apply.auto_apply_min_score
     for job in db.jobs([STATUS_NEW], sort="score"):
-        if job["score"] is None or job["score"] < cfg.apply.auto_apply_min_score:
+        if job["score"] is None or job["score"] < floor:
             break   # sorted by score, so nothing further qualifies
+        source = source_of(job["uuid"])
+        threshold = js_threshold if source == "jobstreet" else cfg.apply.auto_apply_min_score
+        if job["score"] < threshold:
+            continue
         if db.application(job["uuid"]) or _mcf_says_applied(db, job):
             continue
-        if source_of(job["uuid"]) == "jobstreet" and not cfg.jobstreet.allow_auto:
+        if source == "jobstreet" and not cfg.jobstreet.allow_auto:
             continue   # JobStreet jobs wait for a tap unless you opt in
         details = json.loads(job["rank_details"] or "{}")
         if cfg.apply.auto_apply_fresh_grad_only and not details.get("fresh_grad"):

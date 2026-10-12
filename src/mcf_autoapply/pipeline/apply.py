@@ -42,6 +42,19 @@ def pending(db: Database, dry_run: bool, limit: int | None = None, jobstreet: bo
     return rows[:limit] if limit else rows
 
 
+def order_for_run(jobs: list, jobstreet_slots: int | None) -> list:
+    """JobStreet's few allowed jobs go first, then everything else by score.
+
+    JobStreet listings score lower (no skills field), so by score alone they never made it
+    into an hour's budget while MCF jobs were queued, and JobStreet's own cap went unused.
+    """
+    js = [j for j in jobs if source_of(j["job_uuid"]) == "jobstreet"]
+    rest = [j for j in jobs if source_of(j["job_uuid"]) != "jobstreet"]
+    head = js if jobstreet_slots is None else js[:max(0, jobstreet_slots)]
+    tail = [j for j in js if j not in head]
+    return head + rest + tail
+
+
 def site_caps(cfg: Config) -> dict[str, tuple[int, int]]:
     return {"jobstreet": (cfg.jobstreet.hourly_cap, cfg.jobstreet.daily_cap)}
 
@@ -67,7 +80,8 @@ def run(
         result.stopped = reason
         return result
     budget = limit if dry_run else min(limit or 10**6, pacer.remaining())
-    jobs = pending(db, dry_run, budget, jobstreet=cfg.jobstreet.enabled)
+    jobs = order_for_run(pending(db, dry_run, None, jobstreet=cfg.jobstreet.enabled),
+                         None if dry_run else pacer.remaining("jobstreet"))[:budget]
     if not jobs:
         return result
 

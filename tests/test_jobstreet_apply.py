@@ -204,3 +204,36 @@ def test_old_applied_on_mcf_table_is_migrated(tmp_path):
     assert db.applied_on_site_uuids() == {"a"} and db.applied_on_site_count("mcf") == 1
     assert "applied_on_mcf" not in {r[0] for r in db.conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+def test_jobstreet_jobs_get_their_slots_before_higher_scoring_mcf_jobs():
+    from mcf_autoapply.pipeline.apply import order_for_run
+    jobs = [{"job_uuid": "m1"}, {"job_uuid": "m2"}, {"job_uuid": "js:1"}, {"job_uuid": "js:2"},
+            {"job_uuid": "js:3"}]
+    assert [j["job_uuid"] for j in order_for_run(jobs, 2)] == ["js:1", "js:2", "m1", "m2", "js:3"]
+    assert [j["job_uuid"] for j in order_for_run(jobs, 0)] == ["m1", "m2", "js:1", "js:2", "js:3"]
+    assert [j["job_uuid"] for j in order_for_run(jobs, None)] == ["js:1", "js:2", "js:3", "m1", "m2"]
+
+
+def test_auto_mode_uses_the_lower_jobstreet_bar_only_when_allowed(tmp_path):
+    from test_apply_flow import make_cfg
+    from mcf_autoapply.db import Database
+    from mcf_autoapply.models import Job
+    from mcf_autoapply.pipeline import queue as Q
+    from mcf_autoapply.pipeline.answers import AnswerBank
+    from mcf_autoapply.pipeline.discover import apply_filters
+
+    cfg = make_cfg(tmp_path, mode="auto", auto_apply_min_score=50)
+    cfg.filters.title_include_keywords = []
+    cfg.ranking.entry_level_keywords = ["junior"]
+    cfg.jobstreet.enabled = True
+    db = Database(":memory:")
+    db.upsert_job(Job.from_jobstreet({"id": "1", "title": "Junior Developer", "companyName": "A",
+                                      "listingDate": "2026-10-10T00:00:00Z"}), "x")
+    apply_filters(db, cfg)
+    score = db.get_job("js:1")["score"]
+    assert 20 <= score < 50                       # entry-level only: below the MCF bar
+    bank = AnswerBank(cfg.apply.answers_path)
+    assert Q.auto_approve(cfg, db, None, bank) == []            # allow_auto off
+    cfg.jobstreet.allow_auto = True
+    assert [d.job_uuid for d in Q.auto_approve(cfg, db, None, bank)] == ["js:1"]

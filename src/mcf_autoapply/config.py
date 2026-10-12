@@ -110,6 +110,9 @@ class JobStreet(_Strict):
     hourly_cap: int = Field(2, ge=1)
     daily_cap: int = Field(8, ge=1)
     allow_auto: bool = False          # never auto-approve JobStreet jobs until this is true
+    # JobStreet listings carry no skills list or years-of-experience field, so they score lower
+    # than MCF ones; auto mode uses this lower bar for them (when allow_auto is on).
+    auto_min_score: int = Field(20, ge=0, le=100)
     resume_name: str = ""             # part of the saved-resume name on JobStreet; "" = first
     # JobStreet's bot check passes far more often in a visible browser than a hidden one, so
     # runs that include JobStreet jobs open a window on the PC unless this is true.

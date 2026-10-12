@@ -289,7 +289,8 @@ jobstreet:
   requests_per_second: 0.5
   hourly_cap: 2
   daily_cap: 8
-  allow_auto: false                   # true = auto mode may also approve JobStreet jobs
+  allow_auto: true                    # true = auto mode may also approve JobStreet jobs
+  auto_min_score: 20                  # JobStreet jobs score lower (no skills field): auto bar for them
   resume_name: ""                     # part of a saved resume's name on JobStreet; "" = first
   headless: false                     # false = a browser window shows while applying on JobStreet
 

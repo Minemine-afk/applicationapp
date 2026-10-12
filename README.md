@@ -185,7 +185,10 @@ To turn it on, send **/jobstreet on** to the bot (or set `jobstreet.enabled: tru
   buttons (or a reply prompt for free-text ones). Answer, and it's queued again.
 - JobStreet has its own caps on top of the overall ones: 2/hour and 8/day by default
   (`/limits jobstreet h d`, max 5/20). JobStreet jobs are never auto-approved unless
-  `jobstreet.allow_auto: true`.
+  `jobstreet.allow_auto: true` (or `/jobstreet auto on`); then Auto mode uses the lower
+  `jobstreet.auto_min_score` bar for them, since JobStreet listings carry no skills field and
+  score lower. Each round attempts JobStreet's few allowed jobs first so MCF jobs can't crowd
+  them out of the hour's budget.
 - Runs that include JobStreet jobs open a visible browser window (its bot check passes far more
   often that way). Set `jobstreet.headless: true` to hide it.
 - Your JobStreet applied-jobs page is read before each run, so anything you applied to by hand

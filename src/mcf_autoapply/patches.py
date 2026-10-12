@@ -103,10 +103,22 @@ def experience_0_to_1_2026_10_12c(cfg: Config, db: Database) -> list[str]:
     return done + [f"stored jobs re-filtered ({', '.join(f'{n} {k}' for k, n in counts.items())})"]
 
 
+def jobstreet_auto_2026_10_12d(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat: JobStreet applications should happen on their own in Auto mode."""
+    from mcf_autoapply.overrides import set_jobstreet_auto
+
+    done = edit_config(cfg, [("jobstreet", "allow_auto", "true"),
+                             ("jobstreet", "auto_min_score", "20")])
+    set_jobstreet_auto(cfg, db, True)
+    return done + ["jobstreet.allow_auto: on (Auto mode now queues JobStreet jobs, within its "
+                   f"{cfg.jobstreet.hourly_cap}/hour, {cfg.jobstreet.daily_cap}/day limits)"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
     ("2026-10-12c-experience-0-1", experience_0_to_1_2026_10_12c),
+    ("2026-10-12d-jobstreet-auto", jobstreet_auto_2026_10_12d),
 ]
 
 
