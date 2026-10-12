@@ -267,7 +267,7 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
         log(f"{styled_state(d.state)} {short_id(d.job_uuid)}  {d.title}"
             + (f"  [dim]{d.note}[/dim]" if d.note else ""))
     notifier.send_question_cards()
-    notifier.send_review_cards()
+    notifier.send_review_cards(sites=sites)
     if stop and stop():
         log("[yellow]Run interrupted by a Telegram command before applying.[/yellow]")
         return

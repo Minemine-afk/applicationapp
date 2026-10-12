@@ -147,6 +147,35 @@ def requeue_jobstreet_2026_10_13(cfg: Config, db: Database) -> list[str]:
     return [f"JobStreet: {requeued} job(s) the old form code gave up on are queued again"]
 
 
+def tighter_titles_2026_10_13b(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat (off-target cards): no bare "engineer", construction/design/project/
+    business-developer titles excluded, MCF jobs need one of your skills. Re-filters, and takes
+    auto-queued jobs that no longer qualify out of the queue."""
+    import json
+
+    from mcf_autoapply.config import load_config
+    from mcf_autoapply.pipeline import queue as Q
+    from mcf_autoapply.pipeline.discover import apply_filters
+
+    done = copy_sections_from_example(cfg, ["filters"])
+    path = Path(cfg.project_dir) / "config.yml"
+    if path.exists():
+        cfg.filters = load_config(path).filters
+    counts = apply_filters(db, cfg)
+    dropped = 0
+    for app in db.applications([Q.APPROVED]):
+        if app["approved_by"] != "auto":
+            continue
+        job = db.get_job(app["job_uuid"])
+        if app["job_status"] != "new" or (job is not None and not Q.enough_skills(cfg, job)):
+            db.update_application(app["job_uuid"], state=Q.SKIPPED,
+                                  error="no longer matches your filters or skills")
+            dropped += 1
+    db.commit()
+    return done + [f"stored jobs re-filtered ({', '.join(f'{n} {k}' for k, n in counts.items())})",
+                   f"{dropped} off-target auto-queued job(s) taken out of the queue"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
@@ -154,6 +183,7 @@ PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12d-jobstreet-auto", jobstreet_auto_2026_10_12d),
     ("2026-10-12e-limits-20-170", limits_20_per_hour_2026_10_12e),
     ("2026-10-13-requeue-jobstreet", requeue_jobstreet_2026_10_13),
+    ("2026-10-13b-tighter-titles", tighter_titles_2026_10_13b),
 ]
 
 

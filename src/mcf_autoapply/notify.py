@@ -19,7 +19,7 @@ from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank, question_key
 from mcf_autoapply.pipeline.pacer import Pacer
-from mcf_autoapply.sources import LABELS, SITE_NAMES
+from mcf_autoapply.sources import LABELS, SITE_NAMES, source_of
 from mcf_autoapply.telegram import TelegramAPI, TelegramError
 
 CHAT_ID_KEY = "tg:chat_id"
@@ -112,7 +112,8 @@ class Notifier:
         self.db.commit()
         return True
 
-    def review_candidates(self, include_sent: bool = False, any_score: bool = False) -> list:
+    def review_candidates(self, include_sent: bool = False, any_score: bool = False,
+                          sites: list[str] | None = None) -> list:
         t, a = self.cfg.telegram, self.cfg.apply
         upper = a.auto_apply_min_score if a.mode == "auto" and not any_score else 101
         out = []
@@ -127,15 +128,20 @@ class Notifier:
                 continue   # MCF says you've applied (maybe by hand, or to a repost of it)
             if not include_sent and self.db.get_state(f"tg:job:{job['uuid']}"):
                 continue
+            if sites is not None and source_of(job["uuid"]) not in sites:
+                continue   # a JobStreet round sends JobStreet cards only, and so on
+            if not include_sent and not Q.enough_skills(self.cfg, job):
+                continue   # none of your skills: not worth a card (/jobs still lists it)
             out.append(job)
         return out
 
-    def send_review_cards(self, limit: int | None = None, include_sent: bool = False) -> int:
+    def send_review_cards(self, limit: int | None = None, include_sent: bool = False,
+                          sites: list[str] | None = None) -> int:
         """Borderline jobs as cards with Apply / Skip buttons (/jobs: the best, sent or not)."""
         if not self.enabled:
             return 0
         sent = 0
-        jobs = self.review_candidates(include_sent, any_score=include_sent)
+        jobs = self.review_candidates(include_sent, any_score=include_sent, sites=sites)
         for job in jobs[: limit or self.cfg.telegram.max_cards_per_run]:
             msg = self._send(job_card(job), [[("✅ Apply", f"a:{job['uuid']}"),
                                                ("⏭ Skip", f"s:{job['uuid']}")]])

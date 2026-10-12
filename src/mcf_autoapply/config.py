@@ -64,6 +64,10 @@ class Apply(_Strict):
     mode: Literal["dry_run", "manual", "auto"] = "dry_run"
     auto_apply_min_score: int = Field(70, ge=0, le=100)
     auto_apply_fresh_grad_only: bool = False
+    # MCF jobs must mention at least this many of your skills to be auto-queued or sent as a
+    # card (a 1-year-experience job with none of your skills still scores 20 on fit alone).
+    # JobStreet listings carry only a short teaser, so this doesn't apply to them.
+    min_matched_skills: int = Field(1, ge=0)
     # Part of the file name of the resume on your MCF profile to attach. Empty = MCF's default.
     resume_name: str = ""
     answers_path: Path = Path("./answers.yml")

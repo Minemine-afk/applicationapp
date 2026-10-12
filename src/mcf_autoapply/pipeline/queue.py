@@ -99,6 +99,14 @@ def skip(db: Database, uuids: Iterable[str]) -> list[Decision]:
     return out
 
 
+def enough_skills(cfg: Config, job) -> bool:
+    """MCF jobs need apply.min_matched_skills of your skills; JobStreet teasers are too short."""
+    if source_of(job["uuid"]) == "jobstreet" or not cfg.profile.skills:
+        return True   # JobStreet teasers are too short; no skills listed means no rule
+    details = json.loads(job["rank_details"] or "{}")
+    return len(details.get("matched_skills", [])) >= cfg.apply.min_matched_skills
+
+
 def auto_approve(
     cfg: Config, db: Database, client, bank: AnswerBank, limit: int | None = None,
 ) -> list[Decision]:
@@ -123,6 +131,8 @@ def auto_approve(
             continue   # JobStreet jobs wait for a tap unless you opt in
         details = json.loads(job["rank_details"] or "{}")
         if cfg.apply.auto_apply_fresh_grad_only and not details.get("fresh_grad"):
+            continue
+        if not enough_skills(cfg, job):
             continue
         picked.append(job["uuid"])
         if limit and len(picked) >= limit:

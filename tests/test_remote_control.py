@@ -144,8 +144,10 @@ def test_update_never_reinstalls_while_running():
 
 
 def test_jobstreet_check_names_the_blockers(ctx, tg):
+    from datetime import time as dtime
     cfg, db, notifier = ctx
     cfg.apply.mode = "auto"
+    cfg.apply.active_hours = (dtime(0, 0), dtime(23, 59, 59))   # not clock-dependent
     tg.pending_updates += [msg(1, "/jobstreet check")]
     notifier.handle_updates()
     text = tg.sent()[-1]["text"]
@@ -195,7 +197,7 @@ def test_requested_settings_patch_runs_once(ctx, tmp_path):
     (tmp_path / "config.yml").write_text(text.replace("auto_apply_min_score: 55", "auto_apply_min_score: 70")
                                          .replace("delay_seconds: [45, 100]", "delay_seconds: [45, 120]"))
     report = apply_patches(cfg, db)
-    assert len(report) == 6 and "apply.auto_apply_min_score: 55" in report[0]
+    assert len(report) == 7 and "apply.auto_apply_min_score: 55" in report[0]
     new = (tmp_path / "config.yml").read_text()
     assert "auto_apply_min_score: 35\n" in new and "delay_seconds: [45, 100] " in new   # 2nd patch: 35
     assert "  enabled: true\n" in new.split("jobstreet:")[1]
@@ -255,3 +257,65 @@ def test_jobstreet_jobs_misfiled_by_the_old_form_code_are_requeued(ctx, tmp_path
     db.commit()
     from html import escape
     assert "↗️ 1× external: " + escape("'Apply' leads to the employer's own site") in notifier.jobstreet_check()
+
+
+def test_off_target_titles_from_the_screenshot_are_filtered(ctx, job_factory):
+    from mcf_autoapply.config import load_config
+    cfg, db, _ = ctx
+    cfg.filters = load_config(Path(__file__).parents[1] / "config.example.yml").filters
+    titles = {"Project Engineer (Administrative/Construction) (YS81)": "filtered_out",
+              "Design Engineer": "filtered_out",
+              "[FUN ENVIRONMENT] 🌟 Junior Business Developer": "filtered_out",
+              "5 days Software Engineer (Automation Control) up to $5000": "new",
+              "QA Engineer (MNC / 5 Days / AWS)": "new", "Cloud Engineer": "new",
+              "Junior Backend Developer": "new"}
+    for title in titles:
+        db.upsert_job(Job.from_api(job_factory(title=title, minimumYearsExperience=1)), "x")
+    apply_filters(db, cfg)
+    got = {r["title"]: r["status"] for r in db.conn.execute("SELECT title, status FROM jobs")}
+    assert got == titles
+
+
+class NoQuestions:
+    def screening_questions(self, uuid):
+        return []
+
+
+def test_jobs_without_any_of_your_skills_get_no_card_and_no_auto_queue(ctx, tg, job_factory):
+    cfg, db, notifier = ctx
+    cfg.apply.mode, cfg.apply.auto_apply_min_score = "auto", 0
+    cfg.profile.skills = ["Python"]
+    with_skill = job_factory(title="Junior Developer", minimumYearsExperience=1, skills=[],
+                             description="<p>Python services</p>")
+    without = job_factory(title="Junior Tester", minimumYearsExperience=1, skills=[],
+                          description="<p>Excel</p>")
+    for raw in (with_skill, without):
+        db.upsert_job(Job.from_api(raw), "x")
+    js = Job.from_jobstreet({"id": "1", "title": "Junior Tester", "companyName": "B",
+                             "listingDate": "2026-10-10T00:00:00Z"})
+    db.upsert_job(js, "x")
+    apply_filters(db, cfg)
+    cfg.jobstreet.allow_auto = True
+    picked = {d.job_uuid for d in Q.auto_approve(cfg, db, NoQuestions(), AnswerBank(cfg.apply.answers_path))}
+    assert picked == {with_skill["uuid"], "js:1"}           # JobStreet teasers are exempt
+
+    cfg.apply.mode, cfg.telegram.quick_review_min_score = "manual", 0
+    db.conn.execute("DELETE FROM applications")
+    assert {j["uuid"] for j in notifier.review_candidates(sites=["mcf"])} == {with_skill["uuid"]}
+    assert {j["uuid"] for j in notifier.review_candidates(sites=["jobstreet"])} == {"js:1"}
+
+
+def test_auto_queued_jobs_drop_out_when_filters_tighten(ctx, job_factory):
+    from mcf_autoapply.pipeline import apply as A
+    cfg, db, _ = ctx
+    raw = job_factory(title="Design Engineer", minimumYearsExperience=1)
+    db.upsert_job(Job.from_api(raw), "x")
+    apply_filters(db, cfg)
+    Q.approve(db, NoQuestions(), AnswerBank(cfg.apply.answers_path), [raw["uuid"]], by="auto")
+    assert len(A.pending(db, False)) == 1
+    cfg.filters.title_exclude_keywords = ["design engineer"]
+    apply_filters(db, cfg)
+    assert A.pending(db, False) == []
+    db.update_application(raw["uuid"], approved_by="user")   # one you tapped stays queued
+    db.commit()
+    assert len(A.pending(db, False)) == 1

@@ -41,7 +41,9 @@ def pending(db: Database, dry_run: bool, limit: int | None = None, jobstreet: bo
             if (r["state"] != Q.FAILED or r["attempts"] < Q.MAX_ATTEMPTS)
             and r["job_uuid"] not in applied
             and (jobstreet or source_of(r["job_uuid"]) != "jobstreet")
-            and (allowed is None or source_of(r["job_uuid"]) in allowed)]
+            and (allowed is None or source_of(r["job_uuid"]) in allowed)
+            # Auto-queued jobs drop out if the filters were tightened since; ones you tapped stay.
+            and not (r["approved_by"] == "auto" and r["job_status"] not in (None, "new"))]
     return rows[:limit] if limit else rows
 
 

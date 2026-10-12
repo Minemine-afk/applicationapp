@@ -341,8 +341,10 @@ def test_silent_run_explains_why_nothing_was_applied(setup, tg):
     """A run that applies nothing used to send nothing at all."""
     from mcf_autoapply.pipeline.apply import RunResult
     from mcf_autoapply.runner import finish_notifications
+    from datetime import time as dtime
     cfg, db, notifier, jobs, _ = setup
     cfg.apply.mode = "manual"
+    cfg.apply.active_hours = (dtime(0, 0), dtime(23, 59, 59))   # not clock-dependent
     finish_notifications(notifier, None, lambda m: None, cfg=cfg, db=db)   # nothing queued
     text = tg.sent()[-1]["text"]
     assert "Nothing applied: nothing is queued" in text and "Manual mode" in text

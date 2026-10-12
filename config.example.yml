@@ -127,8 +127,8 @@ filters:
     - bi
     - business intelligence
     - etl
-    # broader technology titles
-    - engineer
+    # broader technology titles (not a bare "engineer": that let in construction, design and
+    # project engineers)
     - developer
     - analyst
     - programmer
@@ -209,6 +209,25 @@ filters:
     - nurse
     - teacher
     - chef
+    - business developer
+    - business development
+    - project engineer
+    - design engineer
+    - construction
+    - structural
+    - site engineer
+    - sales engineer
+    - service engineer
+    - maintenance
+    - production
+    - property
+    - real estate
+    - building
+    - plant
+    - piping
+    - drafter
+    - draughtsman
+    - autocad
   # Titles with these words are dropped as too senior, unless the title also has an
   # entry-level keyword (e.g. "Junior/Senior DevOps Engineer" is kept).
   seniority_keywords:
