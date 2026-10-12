@@ -207,15 +207,45 @@ def login_jobstreet(cfg: Config, log: Log, notifier: Notifier | None = None) -> 
     with open_page(cfg.apply, headless=False) as page:
         ok = JS.login(page, tell)
         if ok:
+            page.wait_for_timeout(3000)       # let the site finish writing its login cookies
             save_session(page.context, cfg.apply)
     if not ok:
         return False
-    with open_page(cfg.apply, headless=True) as page:
+    # Reopen the way JobStreet runs do (a visible window unless jobstreet.headless), and
+    # show what the browser sees if the login is gone, so it can be fixed from the evidence.
+    with open_page(cfg.apply, headless=cfg.jobstreet.headless) as page:
         persisted = JS.check_logged_in(page)
-    tell("💾 JobStreet login saved: it survives reopening the browser." if persisted else
-         "⚠️ Logged in to JobStreet, but the login did not survive reopening the browser. "
-         "Please tell the developer.")
+        if not persisted:
+            evidence = _login_evidence(cfg, page, "jobstreet-reopen")
+    if persisted:
+        tell("💾 JobStreet login saved: it survives reopening the browser.")
+    else:
+        tell("⚠️ Logged in to JobStreet, but the login did not survive reopening the browser. "
+             f"Please send the developer this message and the picture.\n{evidence}")
+        if notifier and notifier.enabled:
+            try:
+                notifier.api.send_photo(notifier.chat_id,
+                                        (cfg.apply.screenshots_dir / "jobstreet-reopen.png").read_bytes(),
+                                        "What the reopened browser shows on JobStreet.")
+            except Exception as e:
+                log(f"[yellow]Telegram: {e}[/yellow]")
     return True
+
+
+def _login_evidence(cfg: Config, page, name: str) -> str:
+    """Screenshot + HTML of the page, and a line about it (URL, title, cookies seen)."""
+    cfg.apply.screenshots_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        page.screenshot(path=str(cfg.apply.screenshots_dir / f"{name}.png"), full_page=False)
+        (cfg.apply.screenshots_dir / f"{name}.html").write_text(page.content(), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        cookies = sorted(c["name"] for c in page.context.cookies(page.url))
+    except Exception:
+        cookies = []
+    return (f"URL: {page.url}\nTitle: {page.title()}\nCookies for this site: {len(cookies)} "
+            f"({', '.join(cookies[:12])})\nSaved in data/screenshots/{name}.png and .html")
 
 
 SERVE_LOCK_PORT = 47391

@@ -65,19 +65,39 @@ def save_session(ctx: BrowserContext, rules: Apply) -> int:
     state = ctx.storage_state()
     path = session_path(rules)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"cookies": state.get("cookies", [])}), encoding="utf-8")
+    # localStorage too: some sites (JobStreet's SEEK platform) keep login tokens there.
+    path.write_text(json.dumps({"cookies": state.get("cookies", []),
+                                "origins": state.get("origins", [])}), encoding="utf-8")
     return len(state.get("cookies", []))
 
 
+RESTORE_STORAGE_SCRIPT = """
+(() => {
+  const saved = %s;
+  const items = saved[location.origin];
+  if (!items) return;
+  try {
+    for (const [k, v] of items) if (localStorage.getItem(k) === null) localStorage.setItem(k, v);
+  } catch (e) {}
+})();
+"""
+
+
 def restore_session(ctx: BrowserContext, rules: Apply) -> int:
-    """Put saved cookies back into a freshly launched browser. Returns how many."""
+    """Put saved cookies (and localStorage) back into a freshly launched browser.
+    Returns how many cookies."""
     path = session_path(rules)
     if not path.exists():
         return 0
     try:
-        cookies = json.loads(path.read_text(encoding="utf-8")).get("cookies", [])
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        cookies = saved.get("cookies", [])
         if cookies:
             ctx.add_cookies(cookies)
+        storage = {o["origin"]: [(i["name"], i["value"]) for i in o.get("localStorage", [])]
+                   for o in saved.get("origins", []) if o.get("localStorage")}
+        if storage:
+            ctx.add_init_script(RESTORE_STORAGE_SCRIPT % json.dumps(storage))
         return len(cookies)
     except Exception:   # corrupt or stale file: carry on logged out
         return 0

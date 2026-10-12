@@ -28,10 +28,25 @@ def is_logged_in(page: Page, home_url: str = S.HOME_URL) -> bool:
         return False
 
 
-def check_logged_in(page: Page, home_url: str = S.HOME_URL) -> bool:
+def check_logged_in(page: Page, home_url: str = S.HOME_URL, settle_s: float = 15) -> bool:
+    """Open the home page and read the header. Waits out Cloudflare's interstitial and gives
+    the page time to render the signed-in header."""
     page.goto(home_url, wait_until="domcontentloaded")
-    page.wait_for_timeout(2000)
-    return is_logged_in(page, home_url)
+    deadline = time.monotonic() + S.CLOUDFLARE_CLEAR_S
+    while time.monotonic() < deadline and _on_cloudflare(page):
+        page.wait_for_timeout(1000)
+    deadline = time.monotonic() + settle_s
+    while True:
+        page.wait_for_timeout(1500)
+        if is_logged_in(page, home_url) or time.monotonic() > deadline:
+            return is_logged_in(page, home_url)
+
+
+def _on_cloudflare(page: Page) -> bool:
+    try:
+        return S.CLOUDFLARE_TITLE.lower() in (page.title() or "").lower()
+    except Exception:
+        return False
 
 
 def login(page: Page, on_status: Callable[[str], None], home_url: str = S.HOME_URL,

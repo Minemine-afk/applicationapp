@@ -91,3 +91,18 @@ def test_falls_back_to_bundled_browser_and_hides_automation(tmp_path):
         with open_page(rules, keep_session=False) as page:
             page.goto("about:blank")
             assert page.evaluate("navigator.webdriver") is None
+
+
+def test_local_storage_is_saved_and_restored(rules):
+    """JobStreet (SEEK) keeps login tokens in localStorage, not only cookies."""
+    with open_page(rules) as page:
+        serve_site(page)
+        page.goto(SITE)
+        page.evaluate("localStorage.setItem('token', 'abc')")
+    saved = json.loads(session_path(rules).read_text(encoding="utf-8"))
+    assert saved["origins"][0]["localStorage"] == [{"name": "token", "value": "abc"}]
+
+    with open_page(rules) as page:
+        serve_site(page)
+        page.goto(SITE)
+        assert page.evaluate("localStorage.getItem('token')") == "abc"
