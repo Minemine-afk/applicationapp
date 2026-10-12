@@ -123,7 +123,7 @@ def test_limits_jobstreet_command(setup, tg):
     cfg, db, notifier = setup
     tg.pending_updates += [{"update_id": i, "message": {"chat": {"id": CHAT}, "text": t}}
                            for i, t in enumerate(["/limits", "/limits jobstreet 3 10",
-                                                  "/limits jobstreet 9 99"], 1)]
+                                                  "/limits jobstreet 31 400"], 1)]
     notifier.handle_updates()
     texts = [b["text"] for b in tg.sent()]
     assert "JobStreet:" in texts[0] and "/limits jobstreet" in texts[0]

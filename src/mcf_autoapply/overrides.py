@@ -14,7 +14,7 @@ JS_HOURLY_KEY = "override:jobstreet.hourly_cap"
 JS_DAILY_KEY = "override:jobstreet.daily_cap"
 JS_AUTO_KEY = "override:jobstreet.allow_auto"
 MAX_HOURLY, MAX_DAILY = 30, 300
-MAX_JS_HOURLY, MAX_JS_DAILY = 5, 20     # JobStreet forbids automation; keep it quiet
+MAX_JS_HOURLY, MAX_JS_DAILY = 30, 300   # same ceiling as MCF (you accepted JobStreet's risk)
 
 
 def apply_overrides(cfg: Config, db: Database) -> Config:

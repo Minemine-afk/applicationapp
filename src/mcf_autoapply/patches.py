@@ -209,6 +209,16 @@ def retry_jobstreet_questions_2026_10_13d(cfg: Config, db: Database) -> list[str
     return [f"JobStreet: {n} job(s) waiting on questions or failed are queued again"]
 
 
+def jobstreet_limits_20_2026_10_13e(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat: JobStreet 20/hour like MCF, daily in the same proportion (170)."""
+    from mcf_autoapply.overrides import set_site_limits
+
+    done = edit_config(cfg, [("jobstreet", "hourly_cap", "20"), ("jobstreet", "daily_cap", "170")])
+    set_site_limits(cfg, db, "jobstreet", 20, 170)
+    return done + ["JobStreet limits: 20/hour, 170/day (as /limits jobstreet 20 170 would); "
+                   f"same {int(cfg.apply.delay_seconds[0])}–{int(cfg.apply.delay_seconds[1])} s gap"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
@@ -219,6 +229,7 @@ PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-13b-tighter-titles", tighter_titles_2026_10_13b),
     ("2026-10-13c-midnight-site-pauses", midnight_and_site_pauses_2026_10_13c),
     ("2026-10-13d-retry-jobstreet-questions", retry_jobstreet_questions_2026_10_13d),
+    ("2026-10-13e-jobstreet-limits-20", jobstreet_limits_20_2026_10_13e),
 ]
 
 

@@ -306,8 +306,8 @@ jobstreet:
   page_size: 30
   max_pages: 3
   requests_per_second: 0.5
-  hourly_cap: 2
-  daily_cap: 8
+  hourly_cap: 20
+  daily_cap: 170
   allow_auto: true                    # true = auto mode may also approve JobStreet jobs
   auto_min_score: 20                  # JobStreet jobs score lower (no skills field): auto bar for them
   interval_minutes: 60                # JobStreet runs on its own schedule, independent of MCF

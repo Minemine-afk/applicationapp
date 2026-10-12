@@ -111,8 +111,8 @@ class JobStreet(_Strict):
     page_size: int = Field(30, ge=1, le=100)
     max_pages: int = Field(3, ge=1)
     requests_per_second: float = Field(0.5, gt=0, le=2)
-    hourly_cap: int = Field(2, ge=1)
-    daily_cap: int = Field(8, ge=1)
+    hourly_cap: int = Field(20, ge=1)
+    daily_cap: int = Field(170, ge=1)
     allow_auto: bool = False          # never auto-approve JobStreet jobs until this is true
     # JobStreet listings carry no skills list or years-of-experience field, so they score lower
     # than MCF ones; auto mode uses this lower bar for them (when allow_auto is on).

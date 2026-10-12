@@ -496,8 +496,8 @@ class Notifier:
 
     JOBSTREET_WARNING = (
         "⚠️ JobStreet's robots.txt disallows the search this uses and its terms forbid automated "
-        "applications, so an account doing this can be suspended. Limits are kept low "
-        "({h}/hour, {d}/day) and JobStreet jobs are never auto-approved unless you allow it.")
+        "applications, so an account doing this can be suspended. Its limits are "
+        "{h}/hour, {d}/day, and JobStreet jobs are never auto-approved unless you allow it.")
 
     def _cmd_jobstreet(self, args: str) -> str:
         js = self.cfg.jobstreet
