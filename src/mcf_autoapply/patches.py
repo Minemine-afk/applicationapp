@@ -123,12 +123,37 @@ def limits_20_per_hour_2026_10_12e(cfg: Config, db: Database) -> list[str]:
                    f"stays {int(cfg.apply.delay_seconds[0])}–{int(cfg.apply.delay_seconds[1])} s"]
 
 
+def requeue_jobstreet_2026_10_13(cfg: Config, db: Database) -> list[str]:
+    """The first JobStreet form code mistook the resume/cover-letter choices for employer
+    questions and timed out on SEEK's hidden radio buttons and new-tab apply link. Put the
+    JobStreet jobs it gave up on back in the queue so the fixed code tries them."""
+    import json
+
+    from mcf_autoapply.pipeline import queue as Q
+
+    words = ("resum", "cover letter")
+    requeued = 0
+    for app in db.applications([Q.FAILED, Q.EXTERNAL, Q.CLOSED, Q.NEEDS_INPUT]):
+        if not app["job_uuid"].startswith("js:"):
+            continue
+        if app["state"] == Q.NEEDS_INPUT:
+            questions = json.loads(app["questions"] or "[]")
+            if not any(any(w in q.lower() for w in words) for q in questions):
+                continue   # real employer questions: leave them waiting for your answers
+        db.update_application(app["job_uuid"], state=Q.APPROVED, attempts=0, error=None,
+                              questions=[], answers=[])
+        requeued += 1
+    db.commit()
+    return [f"JobStreet: {requeued} job(s) the old form code gave up on are queued again"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
     ("2026-10-12c-experience-0-1", experience_0_to_1_2026_10_12c),
     ("2026-10-12d-jobstreet-auto", jobstreet_auto_2026_10_12d),
     ("2026-10-12e-limits-20-170", limits_20_per_hour_2026_10_12e),
+    ("2026-10-13-requeue-jobstreet", requeue_jobstreet_2026_10_13),
 ]
 
 

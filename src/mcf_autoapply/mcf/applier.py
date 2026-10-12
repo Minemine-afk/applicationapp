@@ -31,6 +31,7 @@ class Outcome:
     application_id: str | None = None
     # NEEDS_INPUT only: employer questions found in the form, [{question, options}].
     questions: list[dict] | None = None
+    source: str = "mcf"         # which site's applier produced it
 
 
 class Applier:

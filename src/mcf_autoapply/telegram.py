@@ -45,6 +45,12 @@ class TelegramAPI:
                 {"inline_keyboard": [[{"text": label, "url": url}] for label, url in links]})
         return self._post("sendPhoto", data=data, files={"photo": ("qr.png", png, "image/png")})
 
+    def send_document(self, chat_id: int, name: str, content: bytes, caption: str = "",
+                      mime: str = "text/html") -> dict:
+        """A file (e.g. a saved page) with an HTML caption."""
+        data = {"chat_id": str(chat_id), "caption": caption, "parse_mode": "HTML"}
+        return self._post("sendDocument", data=data, files={"document": (name, content, mime)})
+
     def send(self, chat_id: int, text: str, buttons: list[list[tuple[str, str]]] | None = None,
              ) -> dict:
         markup = None

@@ -105,6 +105,28 @@ def test_job_page_states(site, variant, state):
     assert submitted == []
 
 
+def test_plain_apply_to_seeks_own_form_is_applied_not_external(site):
+    """Only where the link goes decides it: SEEK's form at /job/<id>/apply, whatever the label."""
+    page, make, submitted = site
+    out = make().apply("js:6", f"{BASE}/plain-apply", [], [])
+    assert out.state == Q.APPLIED, out.detail
+    assert len(submitted) == 1 and len(page.context.pages) == 1   # no stray tab left open
+
+
+def test_documents_step_groups_are_never_asked_as_questions(site):
+    page, make, submitted = site
+    out = make().apply("js:7", f"{BASE}/ok?q=1", [], [])
+    assert out.state == Q.NEEDS_INPUT
+    assert [q["question"] for q in out.questions] == [Q1]          # not "Resumé"/"Cover letter"
+
+
+def test_non_submissions_leave_a_screenshot_and_the_page(site):
+    page, make, submitted = site
+    out = make().apply("js:8", f"{BASE}/external", [], [])
+    assert out.state == Q.EXTERNAL and out.source == "jobstreet"
+    assert Path(out.screenshot).exists() and Path(out.screenshot).with_suffix(".html").exists()
+
+
 def test_step_needing_manual_details_fails_cleanly(site):
     page, make, submitted = site
     out = make().apply("js:5", f"{BASE}/needs-profile", [], [])

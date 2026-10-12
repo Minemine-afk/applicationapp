@@ -195,7 +195,7 @@ def test_requested_settings_patch_runs_once(ctx, tmp_path):
     (tmp_path / "config.yml").write_text(text.replace("auto_apply_min_score: 55", "auto_apply_min_score: 70")
                                          .replace("delay_seconds: [45, 100]", "delay_seconds: [45, 120]"))
     report = apply_patches(cfg, db)
-    assert len(report) == 5 and "apply.auto_apply_min_score: 55" in report[0]
+    assert len(report) == 6 and "apply.auto_apply_min_score: 55" in report[0]
     new = (tmp_path / "config.yml").read_text()
     assert "auto_apply_min_score: 35\n" in new and "delay_seconds: [45, 100] " in new   # 2nd patch: 35
     assert "  enabled: true\n" in new.split("jobstreet:")[1]
@@ -225,3 +225,33 @@ def test_broader_search_patch_rewrites_sections_and_refilters(ctx, tmp_path, job
     assert "- query: \"old\"" not in new
     assert len(cfg.searches) == 7 and cfg.filters.max_years_experience_required == 1
     assert db.jobs(["new"])[0]["title"] == "Cloud Engineer"   # 1 year passes the filter
+
+
+def test_jobstreet_jobs_misfiled_by_the_old_form_code_are_requeued(ctx, tmp_path):
+    from mcf_autoapply.patches import requeue_jobstreet_2026_10_13
+
+    cfg, db, notifier = ctx
+    for i in range(5):
+        db.upsert_job(Job.from_jobstreet({"id": str(i), "title": f"Dev {i}", "companyName": "Acme",
+                                          "listingDate": "2026-10-10T00:00:00Z"}), "x")
+    apply_filters(db, cfg)
+    Q.approve(db, None, AnswerBank(cfg.apply.answers_path), [f"js:{i}" for i in range(5)])
+    db.update_application("js:0", state=Q.FAILED, attempts=3, error="Locator.click: Timeout")
+    db.update_application("js:1", state=Q.EXTERNAL, error="'Quick apply' leads to …")
+    db.update_application("js:2", state=Q.NEEDS_INPUT, questions=["Resumé", "Cover letter"],
+                          answers=[None, None])
+    db.update_application("js:3", state=Q.NEEDS_INPUT, questions=["Do you have a degree?"],
+                          answers=[None])
+    db.update_application("js:4", state=Q.APPLIED)
+    db.commit()
+    assert requeue_jobstreet_2026_10_13(cfg, db) == [
+        "JobStreet: 3 job(s) the old form code gave up on are queued again"]
+    states = {r["job_uuid"]: r["state"] for r in db.applications()}
+    assert states == {"js:0": Q.APPROVED, "js:1": Q.APPROVED, "js:2": Q.APPROVED,
+                      "js:3": Q.NEEDS_INPUT, "js:4": Q.APPLIED}
+    assert db.application("js:0")["attempts"] == 0
+
+    db.update_application("js:1", state=Q.EXTERNAL, error="'Apply' leads to the employer's own site")
+    db.commit()
+    from html import escape
+    assert "↗️ 1× external: " + escape("'Apply' leads to the employer's own site") in notifier.jobstreet_check()

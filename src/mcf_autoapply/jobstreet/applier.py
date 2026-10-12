@@ -53,50 +53,56 @@ class JobStreetApplier:
         page = self.page
         page.goto(url, wait_until="domcontentloaded")
         if not self._clear_cloudflare():
-            return Outcome(CAPTCHA, "JobStreet's bot check didn't clear", self._screenshot("cloudflare"))
+            return self._evidence(CAPTCHA, "JobStreet's bot check didn't clear", "cloudflare")
         page.locator(f"{S.APPLY_BUTTON}, {S.SIGN_IN_LINK}, main h1, h1").first.wait_for(
             timeout=self.timeout)
         self._settle()
         body = page.locator("body").inner_text()
         if any(m.lower() in body.lower() for m in S.APPLIED_MARKERS):
-            return Outcome(Q.ALREADY_APPLIED, "JobStreet shows this job as applied")
+            return Outcome(Q.ALREADY_APPLIED, "JobStreet shows this job as applied", source="jobstreet")
         if any(m.lower() in body.lower() for m in S.CLOSED_MARKERS):
-            return Outcome(Q.CLOSED, "no longer advertised")
-        button = page.locator(S.APPLY_BUTTON)
-        if not button.count():
+            return self._evidence(Q.CLOSED, "no longer advertised", "closed")
+        target = self._apply_target()
+        if target is None:
             if self._logged_out():
-                return Outcome(LOGGED_OUT, "JobStreet session expired; send /login jobstreet")
-            return Outcome(Q.CLOSED, "no apply button on the job page")
-        label = button.first.inner_text().strip()
-        if S.QUICK_APPLY_TEXT.lower() not in label.lower():
-            return Outcome(Q.EXTERNAL, f"'{label}' leads to the employer's own site")
-        button.first.click()
-        page.wait_for_load_state("domcontentloaded")
+                return self._evidence(LOGGED_OUT, "JobStreet session expired; send /login jobstreet",
+                                      "logged-out")
+            return self._evidence(Q.CLOSED, "no apply button on the job page", "no-apply-button")
+        label, form_url = target
+        if form_url is None:
+            return self._evidence(Q.EXTERNAL, f"'{label}' leads to the employer's own site", "external")
+        # Open SEEK's form in this tab: the button opens a new tab, which would leave this page
+        # sitting on the job details while we look for the form's controls.
+        page.goto(form_url, wait_until="domcontentloaded")
         if not self._clear_cloudflare():
-            return Outcome(CAPTCHA, "JobStreet's bot check didn't clear", self._screenshot("cloudflare"))
+            return self._evidence(CAPTCHA, "JobStreet's bot check didn't clear", "cloudflare")
         if self._logged_out():
-            return Outcome(LOGGED_OUT, "JobStreet session expired; send /login jobstreet")
+            return self._evidence(LOGGED_OUT, "JobStreet session expired; send /login jobstreet",
+                                  "logged-out")
 
         for _ in range(MAX_STEPS):
             self._settle()
             if self._success():
-                return Outcome(Q.APPLIED, "submitted", self._screenshot("submitted"))
+                return Outcome(Q.APPLIED, "submitted", self._screenshot("submitted"), source="jobstreet")
             if self._logged_out():
-                return Outcome(LOGGED_OUT, "JobStreet session expired; send /login jobstreet")
+                return self._evidence(LOGGED_OUT, "JobStreet session expired; send /login jobstreet",
+                                      "logged-out")
             heading = self._heading().lower()
-            # Steps are recognised by their controls, not their titles (SEEK calls the resume
-            # step "Choose documents", for instance).
             if page.locator(S.SUBMIT_BUTTON).count():
                 return self._review()
-            if self._question_groups():
+            kind = self._step_kind()
+            if kind == "documents":
+                self._choose_resume()
+            elif kind == "questions":
                 outcome = self._answer_questions()
                 if outcome:
                     return outcome
-            elif page.locator(f"{S.RESUME_SELECT}, {S.SAVED_RESUME_RADIO}").count():
-                self._choose_resume()
             # profile step and anything unrecognised: just continue
             before = page.url, heading
-            self._continue().click()
+            button = self._continue()
+            if not button.count():
+                return self._fail(f"no Continue button on the '{heading or 'current'}' step")
+            button.click(timeout=self.timeout)
             if not self._changed(before):
                 errors = [t for t in S.FIELD_ERRORS if page.get_by_text(t).count()]
                 why = (f"JobStreet wants more on the '{heading or 'current'}' step" if errors
@@ -104,15 +110,68 @@ class JobStreetApplier:
                 return self._fail(f"{why}; finish this one by hand")
         return self._fail(f"did not reach the review page in {MAX_STEPS} steps")
 
+    def _apply_target(self) -> tuple[str, str | None] | None:
+        """(button label, SEEK form URL or None if it leads off-site), or None if no button."""
+        from urllib.parse import urljoin, urlparse
+
+        page = self.page
+        for sel in S.APPLY_BUTTONS:
+            loc = page.locator(sel)
+            if not loc.count():
+                continue
+            el = loc.first
+            label = (el.inner_text() or "").strip() or "Apply"
+            href = el.get_attribute("href")
+            if href:
+                full = urljoin(page.url, href)
+                here, there = urlparse(page.url), urlparse(full)
+                onsite = there.netloc == here.netloc and re.search(S.ONSITE_APPLY_PATH, there.path)
+                return label, (full if onsite else None)
+            # A button without a link: SEEK's own form only when it says Quick apply.
+            if S.QUICK_APPLY_TEXT.lower() in label.lower():
+                return label, self._url_opened_by(el)
+            return label, None
+        return None
+
+    def _url_opened_by(self, el: Locator) -> str | None:
+        """Click a button that opens SEEK's form (maybe in a new tab); return the form's URL."""
+        page = self.page
+        before = page.url
+        try:
+            with page.context.expect_page(timeout=5_000) as new:
+                el.click(timeout=self.timeout)
+            tab = new.value
+            tab.wait_for_load_state("domcontentloaded")
+            url = tab.url
+            tab.close()
+            return url
+        except PlaywrightTimeout:   # same tab
+            page.wait_for_load_state("domcontentloaded")
+            return page.url if page.url != before else None
+
+    def _step_kind(self) -> str:
+        """documents / questions / profile / other, from the step's address and its controls."""
+        page, url = self.page, self.page.url.lower()
+        if any(p in url for p in S.QUESTIONS_URL_PARTS):
+            return "questions"
+        if any(p in url for p in S.PROFILE_URL_PARTS):
+            return "profile"
+        if page.locator(f"{S.RESUME_SELECT}, {S.SAVED_RESUME_RADIO}").count() or \
+                page.get_by_text(re.compile(S.COVER_LETTER_NONE_TEXT, re.I)).count():
+            return "documents"
+        if self._question_groups():
+            return "questions"
+        return "other"
+
     def _review(self) -> Outcome:
         shot = self._screenshot("review")
         if self.dry_run:
-            return Outcome(Q.DRY_RUN_OK, "stopped at the review page (dry run)", shot)
+            return Outcome(Q.DRY_RUN_OK, "stopped at the review page (dry run)", shot, source="jobstreet")
         self.page.locator(S.SUBMIT_BUTTON).first.click()
         deadline = time.monotonic() + self.timeout / 1000
         while time.monotonic() < deadline:
             if self._success():
-                return Outcome(Q.APPLIED, "submitted", self._screenshot("submitted"))
+                return Outcome(Q.APPLIED, "submitted", self._screenshot("submitted"), source="jobstreet")
             self.page.wait_for_timeout(500)
         return self._fail("no confirmation after Submit; check JobStreet before retrying")
 
@@ -120,26 +179,57 @@ class JobStreetApplier:
 
     def _choose_resume(self) -> None:
         page = self.page
-        radio = page.locator(S.SAVED_RESUME_RADIO)
-        if radio.count():
-            radio.first.click()
+        if not self._pick(page.locator(S.SAVED_RESUME_RADIO), S.SAVED_RESUME_TEXT):
+            pass   # no "select a resumé" choice: the saved resume is probably preselected
         select = page.locator(S.RESUME_SELECT)
         if select.count():
-            options = select.first.locator("option").all_inner_texts()
-            wanted = next((o for o in options if self.resume_name and
-                           self.resume_name.lower() in o.lower()), None)
-            if wanted:
-                select.first.select_option(label=wanted)
-            elif len(options) > 1 and not select.first.input_value():
-                select.first.select_option(index=1)   # first real resume
-        none = page.locator(S.COVER_LETTER_NONE)
-        if none.count():
-            none.first.click()
+            try:
+                options = select.first.locator("option").all_inner_texts()
+                wanted = next((o for o in options if self.resume_name and
+                               self.resume_name.lower() in o.lower()), None)
+                if wanted:
+                    select.first.select_option(label=wanted, timeout=5_000)
+                elif len(options) > 1 and not select.first.input_value():
+                    select.first.select_option(index=1, timeout=5_000)   # first real resume
+            except (PlaywrightTimeout, PlaywrightError):
+                pass   # the step's own check reports a missing resume
+        self._pick(page.locator(S.COVER_LETTER_NONE), S.COVER_LETTER_NONE_TEXT)
+
+    def _pick(self, inputs: Locator, label_text: str | None = None) -> bool:
+        """Select a radio/checkbox even when SEEK hides the input behind its label."""
+        page = self.page
+        if label_text:
+            label = page.locator("label").filter(has_text=re.compile(label_text, re.I))
+            if label.count():
+                try:
+                    label.first.click(timeout=5_000)
+                    return True
+                except (PlaywrightTimeout, PlaywrightError):
+                    pass
+        if inputs.count():
+            el = inputs.first
+            for action in (lambda: el.check(timeout=3_000), lambda: el.click(timeout=3_000),
+                           lambda: el.check(force=True, timeout=3_000)):
+                try:
+                    action()
+                    return True
+                except (PlaywrightTimeout, PlaywrightError):
+                    continue
+        return False
 
     def _question_groups(self) -> list[Locator]:
+        """Employer questions: groups with inputs, minus the documents step's own groups."""
         groups = self.page.locator(S.QUESTION_GROUPS)
-        return [groups.nth(i) for i in range(groups.count())
-                if groups.nth(i).locator("input, select, textarea").count()]
+        out = []
+        for i in range(groups.count()):
+            g = groups.nth(i)
+            if not g.locator("input, select, textarea").count():
+                continue
+            title = self._question_text(g).lower()
+            if any(w in title for w in S.DOCUMENT_GROUP_WORDS):
+                continue
+            out.append(g)
+        return out
 
     def _answer_questions(self) -> Outcome | None:
         """Answer every employer question from the bank; else NEEDS_INPUT with the questions."""
@@ -157,8 +247,10 @@ class JobStreetApplier:
             if answer is None or not self._fill(group, answer, options):
                 missing.append(q)
         if missing:
-            return Outcome(Q.NEEDS_INPUT, f"{len(missing)} employer question(s) need your answer",
-                           self._screenshot("questions"), questions=found)
+            out = self._evidence(Q.NEEDS_INPUT, f"{len(missing)} employer question(s) need your answer",
+                                 "questions")
+            out.questions = found
+            return out
         return None
 
     def _question_text(self, group: Locator) -> str:
@@ -186,8 +278,14 @@ class JobStreetApplier:
         if radios.count():
             for i, label in enumerate(options[:radios.count()]):
                 if normalise(label) == wanted or wanted in normalise(label):
-                    radios.nth(i).check()
-                    return True
+                    labels = group.locator("label").filter(has_text=label)
+                    if labels.count():
+                        try:
+                            labels.first.click(timeout=5_000)
+                            return True
+                        except (PlaywrightTimeout, PlaywrightError):
+                            pass
+                    return self._pick(radios.nth(i))
             return False
         select = group.locator("select")
         if select.count():
@@ -196,9 +294,9 @@ class JobStreetApplier:
                     select.first.select_option(label=opt)
                     return True
             return False
-        text = group.locator("textarea, input[type='text'], input[type='number']")
+        text = group.locator("textarea, input[type='text'], input[type='number'], input:not([type])")
         if text.count():
-            text.first.fill(answer)
+            text.first.fill(answer, timeout=5_000)
             return True
         return False
 
@@ -263,11 +361,16 @@ class JobStreetApplier:
         except PlaywrightError:
             return None
 
-    def _fail(self, detail: str) -> Outcome:
-        shot = self._screenshot("failed")
+    def _evidence(self, state: str, detail: str, label: str) -> Outcome:
+        """An outcome with a screenshot and the page's HTML saved next to it, so anything
+        other than a submission can be checked (and the hooks fixed) from the files."""
+        shot = self._screenshot(label)
         if shot:
             try:
                 Path(shot).with_suffix(".html").write_text(self.page.content(), encoding="utf-8")
             except PlaywrightError:
                 pass
-        return Outcome(Q.FAILED, detail, shot)
+        return Outcome(state, detail, shot, source="jobstreet")
+
+    def _fail(self, detail: str) -> Outcome:
+        return self._evidence(Q.FAILED, detail, "failed")

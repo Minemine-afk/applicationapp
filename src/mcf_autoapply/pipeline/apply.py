@@ -159,8 +159,8 @@ def run(
         # Login and CAPTCHA stops above aren't the job's fault, so only these count as attempts.
         fields: dict = {"state": outcome.state, "error": None, "screenshot": outcome.screenshot,
                         "attempts": app["attempts"] + 1}
-        if outcome.state == Q.FAILED:
-            fields["error"] = outcome.detail
+        if outcome.state in (Q.FAILED, Q.EXTERNAL, Q.CLOSED):
+            fields["error"] = outcome.detail   # why it wasn't submitted (shown by /jobstreet check)
         if outcome.state == Q.APPLIED:
             fields["submitted_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             fields["mcf_application_id"] = outcome.application_id

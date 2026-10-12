@@ -381,3 +381,21 @@ def test_status_shows_submissions_per_hour_today(setup, tg):
     db.commit()
     text = notifier.status_text()
     assert f"Per hour today: {now.hour - 2:02d}h 2 · {now.hour - 1:02d}h 0 · {now.hour:02d}h 1" in text
+
+
+def test_jobstreet_non_submissions_send_the_screenshot_and_page(setup, tg, tmp_path):
+    from mcf_autoapply.mcf.applier import Outcome
+    from mcf_autoapply.pipeline.apply import RunResult
+    cfg, db, notifier, _, _ = setup
+    shot = tmp_path / "x-js-1-external.png"
+    shot.write_bytes(b"png")
+    shot.with_suffix(".html").write_text("<html>job</html>")
+    result = RunResult(dry_run=False, outcomes=[
+        ("Dev", Outcome(Q.EXTERNAL, "'Apply' leads to the employer's own site", str(shot),
+                        source="jobstreet")),
+        ("MCF job", Outcome(Q.EXTERNAL, "Careers@Gov", str(shot)))])   # MCF: no picture
+    notifier.run_summary(0, 0, result)
+    photos = [b["multipart"] for b in tg.sent("sendPhoto")]
+    docs = [b["multipart"] for b in tg.sent("sendDocument")]
+    assert len(photos) == 1 and "Employer's own site · JobStreet" in photos[0]   # MCF: no picture
+    assert len(docs) == 1 and "x-js-1-external.html" in docs[0] and "<html>job</html>" in docs[0]

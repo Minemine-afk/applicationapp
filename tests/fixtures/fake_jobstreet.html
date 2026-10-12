@@ -3,7 +3,9 @@
      src/mcf_autoapply/jobstreet/selectors.py. Variant from the URL:
      /job/<variant>?q=<number of employer questions>. -->
 <html>
-<head><meta charset="utf-8"><title>Fake JobStreet</title></head>
+<head><meta charset="utf-8"><title>Fake JobStreet</title>
+<style>/* SEEK hides the real radio inputs and styles the label instead */
+.vh { position: absolute; width: 0; height: 0; opacity: 0; overflow: hidden; }</style></head>
 <body>
 <header><a href="/my-activity/applied-jobs" data-automation="profile-menu">My activity</a></header>
 <main id="app"></main>
@@ -30,8 +32,12 @@ function jobPage() {
   }
   if (variant === "applied") return render("<h1>Software Engineer</h1><p>You applied for this job on 10 Oct 2026</p>");
   if (variant === "closed") return render("<h1>Software Engineer</h1><p>This job is no longer advertised</p>");
-  const label = variant === "external" ? "Apply" : "Quick apply";
-  render(`<h1>Software Engineer</h1><p>ACME</p><a data-automation="job-detail-apply" href="${path}/apply${location.search}">${label}</a>`);
+  // The apply link opens a new tab on SEEK; "Apply" (not quick) can still be SEEK's own form.
+  if (variant === "external")
+    return render(`<h1>Software Engineer</h1><p>ACME</p><a data-automation="job-detail-apply" target="_blank" href="https://careers.acme.example/jobs/42">Apply</a>`);
+  const label = variant === "plain-apply" ? "Apply" : "Quick apply";
+  render(`<h1>Software Engineer</h1><p>ACME</p><nav><a href="/career-advice/how-to-apply">How to apply</a></nav>
+    <a data-automation="job-detail-apply" target="_blank" href="${path}/apply${location.search}">${label}</a>`);
 }
 
 const steps = ["resume"];
@@ -39,21 +45,32 @@ if (nQuestions) steps.push("questions");
 if (variant === "needs-profile") steps.push("profile");
 steps.push("review");
 
+const STEP_URL = {resume: "", questions: "/role-requirements", profile: "/profile", review: "/review"};
+
 function step(i) {
   const name = steps[i];
-  history.replaceState({}, "", path + "/apply/" + name + location.search);
+  history.replaceState({}, "", path.replace(/\/apply.*$/, "") + "/apply" + STEP_URL[name] + location.search);
   if (name === "resume") {
+    // Radio groups in fieldsets, like the employer questions: they must not be taken for them.
     render(`<h1>Choose documents</h1>
-      <label><input type="radio" name="resume-method" value="change" data-testid="resume-method-change"> Choose a resume</label>
-      <select data-testid="select-input"><option value="">Select</option><option>Kumar_CV_2026.pdf</option><option>Old_CV.pdf</option></select>
-      <label><input type="radio" name="cover" value="none" data-testid="coverLetter-method-none"> Don't include a cover letter</label>
+      <fieldset><legend>Resumé</legend>
+        <label><input class="vh" type="radio" name="resume-method" value="upload"> Upload a resumé</label>
+        <label><input class="vh" type="radio" name="resume-method" value="change" data-testid="resume-method-change"> Select a resumé</label>
+        <select data-testid="select-input"><option value="">Select</option><option>Kumar_CV_2026.pdf</option><option>Old_CV.pdf</option></select>
+        <label><input class="vh" type="radio" name="resume-method" value="none"> Don't include a resumé</label>
+      </fieldset>
+      <fieldset><legend>Cover letter</legend>
+        <label><input class="vh" type="radio" name="cover" value="upload"> Upload a cover letter</label>
+        <label><input class="vh" type="radio" name="cover" value="write"> Write a cover letter</label>
+        <label><input class="vh" type="radio" name="cover" value="none" data-testid="coverLetter-method-none"> Don't include a cover letter</label>
+      </fieldset>
       <button data-testid="continue-button">Continue</button><p id="err"></p>`);
     app.querySelector("select").onchange = e => state.resume = e.target.value;
     app.querySelector("[data-testid=coverLetter-method-none]").onchange = () => state.cover = "none";
   } else if (name === "questions") {
     const groups = QUESTIONS.slice(0, nQuestions).map((item, k) => {
       if (item.opts.length) {
-        const opts = item.opts.map((o, j) => `<label><input type="radio" name="q${k}" value="${o}"> ${o}</label>`).join("");
+        const opts = item.opts.map((o, j) => `<label><input class="vh" type="radio" name="q${k}" value="${o}"> ${o}</label>`).join("");
         return `<fieldset data-testid="question-${k}"><legend>${item.q}</legend>${opts}</fieldset>`;
       }
       return `<fieldset data-testid="question-${k}"><legend>${item.q}</legend><input type="text" name="q${k}"></fieldset>`;
@@ -66,7 +83,7 @@ function step(i) {
       <button data-testid="review-submit-application">Submit application</button>`);
     app.querySelector("[data-testid=review-submit-application]").onclick = () => {
       fetch("/submitted", {method: "POST", body: JSON.stringify(state)}).then(() => {
-        history.replaceState({}, "", path + "/apply/success");
+        history.replaceState({}, "", path.replace(/\/apply.*$/, "") + "/apply/success");
         render("<h1>Application sent</h1><p>Your application has been submitted.</p>");
       });
     };

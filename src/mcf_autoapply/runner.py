@@ -226,6 +226,7 @@ def finish_notifications(notifier: Notifier, result, log: Log, new_passed: int =
                          db: Database | None = None, kind: str = "run") -> None:
     notifier.run_summary(new_passed, auto_approved, result)
     notifier.report_stop(result.stopped if result else None)
+    notifier.send_question_cards()   # questions found inside forms during this run
     if cfg is not None and db is not None:
         if reason := record_run(cfg, db, notifier, result, kind, new_passed, auto_approved):
             log(f"[yellow]Nothing applied: {reason}[/yellow]")

@@ -254,21 +254,37 @@ class Notifier:
         self._send_screenshots(outcomes)
         return True
 
+    JOBSTREET_EVIDENCE = (Q.EXTERNAL, Q.CLOSED, Q.NEEDS_INPUT, "captcha", "logged_out")
+
     def _send_screenshots(self, outcomes) -> None:
-        """Dry-run review pages and failures, so you can check them from your phone."""
+        """Dry-run review pages and failures, so you can check them from your phone. For
+        JobStreet (whose form hooks are still being confirmed) also anything else that wasn't
+        submitted, plus the first such page as a file to forward for fixing."""
         shots = [(t, o) for t, o in outcomes
-                 if o.state in (Q.DRY_RUN_OK, Q.FAILED) and o.screenshot
-                 and Path(o.screenshot).is_file()]
+                 if (o.state in (Q.DRY_RUN_OK, Q.FAILED)
+                     or (getattr(o, "source", "mcf") == "jobstreet" and o.state in self.JOBSTREET_EVIDENCE))
+                 and o.screenshot and Path(o.screenshot).is_file()]
+        labels = {Q.DRY_RUN_OK: "🧪 Review page (not submitted)", Q.FAILED: "❌ Failed",
+                  Q.EXTERNAL: "↗️ Employer's own site", Q.CLOSED: "🚫 Closed / no apply button",
+                  Q.NEEDS_INPUT: "❓ Needs your answers", "captcha": "🤖 Bot check",
+                  "logged_out": "🔒 Logged out"}
+        page_sent = False
         for title, o in shots[:MAX_SCREENSHOTS_PER_RUN]:
-            icon = "🧪 Review page (not submitted)" if o.state == Q.DRY_RUN_OK else "❌ Failed"
-            caption = f"{icon}\n<b>{escape(title)}</b>"
-            if o.state == Q.FAILED:
+            site = " · JobStreet" if getattr(o, "source", "mcf") == "jobstreet" else ""
+            caption = f"{labels.get(o.state, o.state)}{site}\n<b>{escape(title)}</b>"
+            if o.state != Q.DRY_RUN_OK and o.detail:
                 caption += f"\n{escape(o.detail)}"
             try:
                 self.api.send_photo(self.chat_id, Path(o.screenshot).read_bytes(), caption[:1000])
+                html = Path(o.screenshot).with_suffix(".html")
+                if site and not page_sent and o.state != Q.DRY_RUN_OK and html.is_file():
+                    self.api.send_document(
+                        self.chat_id, html.name, html.read_bytes(),
+                        "📄 The JobStreet page as the app saw it. Forward this to the developer "
+                        "if JobStreet applications keep failing.")
+                    page_sent = True
             except (TelegramError, OSError) as e:
                 self.errors.append(str(e))
-                break
 
     def report_stop(self, reason: str | None) -> None:
         if not reason:
@@ -568,8 +584,15 @@ class Notifier:
                 lines.append("ℹ️ Manual mode: tap Apply on JobStreet cards in /jobs to queue them")
             elif cfg.apply.mode == "dry_run":
                 lines.append("ℹ️ Dry run mode never submits")
-        for r in [r for r in apps if r["state"] == Q.FAILED][:3]:
-            lines.append(f"{bad} Failed: {escape(r['title'])} — {escape(r['error'] or '?')}")
+        # Why JobStreet jobs weren't submitted: each reason once, with how many and an example.
+        reasons: dict[tuple[str, str], list[str]] = {}
+        for r in apps:
+            if r["state"] in (Q.FAILED, Q.EXTERNAL, Q.CLOSED):
+                reasons.setdefault((r["state"], r["error"] or "?"), []).append(r["title"])
+        for (state, why), titles in sorted(reasons.items(), key=lambda kv: -len(kv[1]))[:5]:
+            icon = {Q.FAILED: bad, Q.EXTERNAL: "↗️", Q.CLOSED: "🚫"}[state]
+            lines.append(f"{icon} {len(titles)}× {state}: {escape(why[:120])} "
+                         f"(e.g. {escape(titles[0][:50])})")
         if states.get(Q.NEEDS_INPUT):
             lines.append(f"❓ {states[Q.NEEDS_INPUT]} waiting on your answers (/questions)")
 
