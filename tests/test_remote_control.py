@@ -9,7 +9,7 @@ from mcf_autoapply.config import Config
 from mcf_autoapply.db import Database
 from mcf_autoapply.models import Job
 from mcf_autoapply.notify import Notifier
-from mcf_autoapply.overrides import apply_overrides
+from mcf_autoapply.overrides import apply_overrides, set_jobstreet_enabled
 from mcf_autoapply.pipeline import apply as A
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
@@ -140,3 +140,64 @@ def test_update_never_reinstalls_while_running():
     assert "pip" not in inspect.getsource(updater.run_update)
     script = (Path(__file__).parents[1] / "scripts" / "start-serve-windows.cmd").read_text()
     assert script.index("pip install -q -e .") < script.index("mcf-apply.exe\" serve")
+
+
+def test_jobstreet_check_names_the_blockers(ctx, tg):
+    cfg, db, notifier = ctx
+    cfg.apply.mode = "auto"
+    tg.pending_updates += [msg(1, "/jobstreet check")]
+    notifier.handle_updates()
+    text = tg.sent()[-1]["text"]
+    assert text.startswith("<b>JobStreet check</b>\n🔴 Blocking: JobStreet is off; never logged in")
+    assert "/jobstreet on" in text and "/login jobstreet" in text
+
+    set_jobstreet_enabled(cfg, db, True)
+    db.set_state("jobstreet:login", "in")
+    db.upsert_job(Job.from_jobstreet({"id": "9", "title": "Dev", "companyName": "Acme",
+                                      "listingDate": "2026-10-10T00:00:00Z"}), "x")
+    apply_filters(db, cfg)
+    text = notifier.jobstreet_check()
+    assert "🔴 Blocking: auto mode not allowed for JobStreet" in text
+    assert "/jobstreet auto on" in text and "1 JobStreet jobs found" in text
+
+    tg.pending_updates += [msg(2, "/jobstreet auto on")]
+    notifier.handle_updates()
+    assert cfg.jobstreet.allow_auto is True
+    fresh = Config.model_validate({"db_path": ":memory:", "searches": [{"query": "x"}]})
+    assert apply_overrides(fresh, db).jobstreet.allow_auto is True
+    assert notifier.jobstreet_check().splitlines()[1].startswith("🟢 Nothing is blocking")
+
+
+def test_config_command_edits_config_yml(ctx, tg, tmp_path):
+    import shutil
+
+    cfg, db, notifier = ctx
+    cfg.project_dir = tmp_path
+    shutil.copy(Path(__file__).parents[1] / "config.example.yml", tmp_path / "config.yml")
+    assert "already" in notifier._cmd_config("apply.auto_apply_min_score 55")
+    assert notifier._cmd_config("apply.auto_apply_min_score 60").startswith("✏️")
+    assert "auto_apply_min_score: 60\n" in (tmp_path / "config.yml").read_text()
+    assert "isn't valid" in notifier._cmd_config("apply.auto_apply_min_score banana")
+    assert "auto_apply_min_score: 60\n" in (tmp_path / "config.yml").read_text()   # rolled back
+    assert "Couldn't find" in notifier._cmd_config("apply.nonsense 1")
+    assert "Use /config" in notifier._cmd_config("nonsense")
+
+
+def test_requested_settings_patch_runs_once(ctx, tmp_path):
+    import shutil
+
+    from mcf_autoapply.patches import apply_patches
+
+    cfg, db, _ = ctx
+    cfg.project_dir = tmp_path
+    text = (Path(__file__).parents[1] / "config.example.yml").read_text()
+    (tmp_path / "config.yml").write_text(text.replace("auto_apply_min_score: 55", "auto_apply_min_score: 70")
+                                         .replace("delay_seconds: [45, 100]", "delay_seconds: [45, 120]"))
+    report = apply_patches(cfg, db)
+    assert len(report) == 1 and "apply.auto_apply_min_score: 55" in report[0]
+    new = (tmp_path / "config.yml").read_text()
+    assert "auto_apply_min_score: 55\n" in new and "delay_seconds: [45, 100] " in new
+    assert "  enabled: true\n" in new.split("jobstreet:")[1]
+    assert cfg.apply.auto_apply_min_score == 55 and cfg.apply.delay_seconds == (45, 100)
+    assert cfg.jobstreet.enabled and (cfg.apply.hourly_cap, cfg.apply.daily_cap) == (12, 100)
+    assert apply_patches(cfg, db) == []            # never twice

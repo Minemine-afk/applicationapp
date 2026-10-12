@@ -1,0 +1,201 @@
+# Copy to config.yml and edit. `mcf-apply refilter` re-applies filter and ranking
+# changes to every job already stored, so you can tune these without re-downloading.
+
+db_path: ./data/jobs.db
+
+profile:
+  # Used to rank jobs: each skill found in a job's skills list or description counts
+  # as a match (whole words, case-insensitive).
+  skills:
+    - Python
+    - Java
+    - JavaScript
+    - C++
+    - SQL
+    - React
+    - HTML
+    - FastAPI
+    - Node.js
+    - Express
+    - REST
+    - API
+    - MySQL
+    - MongoDB
+    - Power BI
+    - Spark
+    - PySpark
+    - Hadoop
+    - ETL
+    - Machine Learning
+    - Data Mining
+    - Data Analysis
+    - Data Visualization
+    - Linux
+    - Git
+    - Agile
+    - Scrum
+    - Supabase
+    - Cloudflare
+    - OCR
+
+searches:
+  - query: "software engineer"
+    also: ["software developer", "backend engineer", "full stack engineer", "platform engineer"]
+  - query: "AI engineer"
+    also: ["machine learning engineer", "ML engineer", "LLM engineer", "MLOps engineer"]
+  - query: "devops engineer"
+    also: ["site reliability engineer", "cloud engineer", "infrastructure engineer"]
+  - query: "data analyst"
+    also: ["data engineer", "data scientist", "business intelligence", "analytics"]
+  - query: "fresh graduate software"
+    also: ["graduate software engineer", "junior software engineer", "associate software engineer",
+           "junior developer", "graduate data analyst", "junior data engineer"]
+
+filters:
+  max_age_days: 14                    # ignore postings older than this
+  salary_min_monthly: 3500            # drop jobs whose top of range is below this (SGD)
+  max_years_experience_required: 2    # drop jobs asking for more than this
+  employment_types: [Full Time, Permanent, Contract]   # empty list = any
+  position_levels: []                 # e.g. [Executive, Senior Executive, Professional]
+  # The title must contain at least one of these (whole words, case-insensitive).
+  # Searches return loosely related jobs, so this keeps the feed on target.
+  title_include_keywords:
+    # software engineering
+    - software
+    - developer
+    - programmer
+    - backend
+    - back-end
+    - frontend
+    - front-end
+    - full stack
+    - fullstack
+    - full-stack
+    # AI / ML
+    - ai
+    - genai
+    - llm
+    - ml
+    - mlops
+    - machine learning
+    - deep learning
+    - nlp
+    - computer vision
+    # DevOps / platform
+    - devops
+    - devsecops
+    - sre
+    - site reliability
+    - platform engineer
+    - cloud
+    - terraform
+    - kubernetes
+    - infrastructure engineer
+    # data
+    - data analyst
+    - data analytics
+    - data engineer
+    - data engineering
+    - data scientist
+    - data science
+    - big data
+    - data platform
+    - business analytics
+    - analytics engineer
+    - bi
+    - business intelligence
+    - etl
+  title_exclude_keywords:
+    - intern
+    - internship
+    - trainee
+    - sales
+    - presales
+    - pre-sales
+    - mechanical
+    - electrical
+    - civil
+    - m&e
+    - facilities
+    - field service
+    - network
+    - data centre
+    - data center
+    - data entry
+    - helpdesk
+    - desktop support
+    - infrastructure support
+    - technician
+    - instrumentation
+    - admissions
+  # Titles with these words are dropped as too senior, unless the title also has an
+  # entry-level keyword (e.g. "Junior/Senior DevOps Engineer" is kept).
+  seniority_keywords:
+    - senior
+    - sr
+    - lead
+    - principal
+    - staff
+    - head
+    - manager
+    - director
+    - architect
+    - vp
+  company_blocklist: []               # names (substring, case-insensitive) or UENs
+  exclude_agencies: false             # true = skip recruitment agencies
+  skip_duplicate_postings: true       # same company + same title already in the feed
+
+ranking:
+  # Jobs whose title has one of these, or whose MCF level is "Fresh/entry level",
+  # are ranked first.
+  entry_level_keywords:
+    - fresh grad
+    - fresh graduate
+    - fresh graduates
+    - graduate
+    - graduates
+    - junior
+    - jr
+    - entry level
+    - entry-level
+    - associate
+    - new grad
+    - early career
+    - graduate programme
+    - graduate program
+  entry_level_weight: 0.6             # share of the score for entry-level fit; the rest is skills
+  skills_for_full_marks: 6            # this many of your skills mentioned = full skills score
+
+apply:
+  # dry_run: fill every form up to the review page and screenshot it, never submit.
+  # manual:  submit only the jobs you approve (`mcf-apply approve <ID>`).
+  # auto:    also approve jobs scoring auto_apply_min_score or more by itself.
+  mode: dry_run
+  auto_apply_min_score: 70
+  auto_apply_fresh_grad_only: false
+  resume_name: ""                     # part of the file name of the MCF resume to attach; "" = MCF's default
+  answers_path: ./answers.yml         # your yes/no screening answers (`mcf-apply questions`)
+  hourly_cap: 4
+  daily_cap: 40                       # hard ceiling
+  ramp: [15, 25, 40]                  # daily cap steps up one level per week; restarts after a pause
+  active_hours: ["08:00", "22:00"]
+  timezone: Asia/Singapore
+  delay_seconds: [45, 120]            # random wait between submissions
+  max_failures_per_hour: 2            # more than this pauses submissions
+  browser_profile: ./data/browser-profile   # keeps your MCF login between runs
+  headless: false                     # `mcf-apply run` is headless regardless
+  screenshots_dir: ./data/screenshots
+
+telegram:
+  # Job cards with Apply / Skip, screening questions with Yes / No, run summaries and alerts.
+  # Setup: README → Telegram. The bot token goes in the TELEGRAM_BOT_TOKEN environment
+  # variable, never in this file.
+  enabled: false
+  quick_review_min_score: 60          # jobs from here up to auto_apply_min_score come to your phone
+  max_cards_per_run: 8
+  alert_every_hours: 6                # same alert (e.g. login expired) at most this often
+
+discovery:
+  page_size: 100
+  max_pages: 5                        # per search term, per run
+  requests_per_second: 1

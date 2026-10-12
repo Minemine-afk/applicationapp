@@ -337,6 +337,7 @@ def login_jobstreet(cfg: Config, log: Log, notifier: Notifier | None = None) -> 
             evidence = _login_evidence(cfg, page, "jobstreet-reopen")
     if persisted:
         tell("💾 JobStreet login saved: it survives reopening the browser.")
+        _remember_login(cfg, "jobstreet")
     else:
         tell("⚠️ Logged in to JobStreet, but the login did not survive reopening the browser. "
              f"Please send the developer this message and the picture.\n{evidence}")
@@ -348,6 +349,20 @@ def login_jobstreet(cfg: Config, log: Log, notifier: Notifier | None = None) -> 
             except Exception as e:
                 log(f"[yellow]Telegram: {e}[/yellow]")
     return True
+
+
+def _remember_login(cfg: Config, site: str) -> None:
+    """Note a verified login (for /jobstreet check); a LOGGED_OUT outcome later clears it."""
+    from datetime import datetime, timezone
+
+    try:
+        db = Database(cfg.db_path)
+        db.set_state(f"{site}:login", "in")
+        db.set_state(f"{site}:login_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        db.commit()
+        db.close()
+    except Exception:
+        pass
 
 
 def _login_evidence(cfg: Config, page, name: str) -> str:
@@ -628,6 +643,11 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
                 "/update": update_cmd, "/restart": restart_cmd}
     notifier.register_commands(serve=True)
     notifier.clear_login_qr()   # a QR from before a restart can't be approved any more
+    from mcf_autoapply.patches import apply_patches
+
+    for line in apply_patches(cfg, db):
+        log(line)
+        notifier._send(line)
     notifier._send("🟢 <b>mcf-apply is running.</b> Searching for jobs now; "
                    f"then every {cfg.serve.interval_minutes} min. /help for commands.")
     next_run = clock()   # run straight away on start

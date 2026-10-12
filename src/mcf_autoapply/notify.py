@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 from mcf_autoapply.config import Config, get_env
 from mcf_autoapply.db import STATUS_NEW, Database, applied_key
 from mcf_autoapply.overrides import (MAX_DAILY, MAX_HOURLY, MAX_JS_DAILY, MAX_JS_HOURLY, MODES,
-                                     set_jobstreet_enabled, set_limits, set_mode,
-                                     set_site_limits)
+                                     set_jobstreet_auto, set_jobstreet_enabled, set_limits,
+                                     set_mode, set_site_limits)
 from mcf_autoapply.mcf.client import MCFClient
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank, question_key
@@ -36,7 +36,8 @@ COMMAND_HELP = {
     "queue": "What's still to be submitted, and what was applied to today",
     "mode": "Switch dry run / manual / auto",
     "limits": "Show or set how many to apply per hour and per day",
-    "jobstreet": "Turn JobStreet on or off (/jobstreet on)",
+    "jobstreet": "JobStreet: on / off / check (what's blocking it) / auto on|off",
+    "config": "Change a setting in config.yml, e.g. /config apply.auto_apply_min_score 55",
     "pause": "Stop submitting until /resume",
     "resume": "Start submitting again",
     "help": "All commands",
@@ -387,6 +388,7 @@ class Notifier:
             "/mode": self._cmd_mode,
             "/limits": self._cmd_limits,
             "/jobstreet": self._cmd_jobstreet,
+            "/config": self._cmd_config,
             "/pause": self._cmd_pause,
             "/resume": self._cmd_resume,
         }
@@ -487,9 +489,143 @@ class Notifier:
         if want in ("off", "disable", "no"):
             set_jobstreet_enabled(self.cfg, self.db, False)
             return "⚪ JobStreet is off. Queued JobStreet jobs stay queued but won't be applied to."
+        if want in ("check", "status", "why"):
+            return self.jobstreet_check()
+        if want.split()[:1] == ["auto"]:
+            flag = want.split()[1:2]
+            if flag and flag[0] in ("on", "off"):
+                set_jobstreet_auto(self.cfg, self.db, flag[0] == "on")
+                return ("🤖 Auto mode may now queue JobStreet jobs by itself (within the JobStreet "
+                        "limits)." if flag[0] == "on" else
+                        "JobStreet jobs now wait for you to tap Apply, even in Auto mode.")
+            return "Use /jobstreet auto on or /jobstreet auto off."
         state = "on" if js.enabled else "off"
-        return (f"JobStreet is <b>{state}</b>. /jobstreet on or /jobstreet off.\n"
+        return (f"JobStreet is <b>{state}</b>. /jobstreet on, /jobstreet off, /jobstreet check "
+                "(what's blocking it), /jobstreet auto on|off.\n"
                 + self.JOBSTREET_WARNING.format(h=js.hourly_cap, d=js.daily_cap))
+
+    def jobstreet_check(self) -> str:
+        """Everything that decides whether JobStreet jobs get applied to, with the blocker first."""
+        from mcf_autoapply.jobstreet.client import BLOCKED_KEY
+        from mcf_autoapply.pipeline import apply as A
+
+        cfg, db, js = self.cfg, self.db, self.cfg.jobstreet
+        ok, bad = "✅", "❌"
+        lines = ["<b>JobStreet check</b>"]
+        blockers = []
+
+        # 1. switched on?
+        lines.append(f"{ok if js.enabled else bad} JobStreet {'on' if js.enabled else 'off (/jobstreet on)'}")
+        if not js.enabled:
+            blockers.append("JobStreet is off")
+
+        # 2. logged in?
+        login = db.get_state("jobstreet:login")
+        at = db.get_state("jobstreet:login_at")
+        when = ""
+        if at:
+            try:
+                when = " since " + datetime.fromisoformat(at).astimezone(
+                    ZoneInfo(cfg.apply.timezone)).strftime("%d %b %H:%M")
+            except Exception:
+                pass
+        if login == "in":
+            lines.append(f"{ok} Logged in{when}")
+        elif login == "out":
+            lines.append(f"{bad} JobStreet logged us out: send /login jobstreet")
+            blockers.append("logged out")
+        else:
+            lines.append("❔ Not logged in yet (no saved JobStreet login): send /login jobstreet")
+            blockers.append("never logged in")
+
+        # 3. searches
+        if until := db.get_state(BLOCKED_KEY):
+            lines.append(f"{bad} JobStreet is blocking searches (Cloudflare 403) until {escape(until[11:16])} UTC")
+            blockers.append("search blocked")
+        rows = db.conn.execute("SELECT status, COUNT(*) n FROM jobs WHERE source='jobstreet' "
+                               "GROUP BY status").fetchall()
+        by_status = {r["status"]: r["n"] for r in rows}
+        total = sum(by_status.values())
+        if total:
+            lines.append(f"{ok} {total} JobStreet jobs found so far: "
+                         + ", ".join(f"{n} {s}" for s, n in sorted(by_status.items())))
+        else:
+            lines.append(f"{bad if js.enabled else '•'} No JobStreet jobs found yet"
+                         + (" (the next run searches it)" if js.enabled else ""))
+
+        # 4. queue
+        apps = [r for r in db.applications() if r["job_uuid"].startswith("js:")]
+        states = Counter(r["state"] for r in apps)
+        queued = states.get(Q.APPROVED, 0)
+        lines.append(f"{'•'} JobStreet queue: " + (", ".join(f"{n} {s}" for s, n in sorted(states.items()))
+                                                    or "nothing queued or applied yet"))
+        if not queued and not states.get(Q.APPLIED):
+            if cfg.apply.mode == "auto" and not js.allow_auto:
+                lines.append(f"{bad} Auto mode never picks JobStreet jobs by itself until you allow "
+                             "it: send /jobstreet auto on, or tap Apply on JobStreet cards in /jobs")
+                blockers.append("auto mode not allowed for JobStreet")
+            elif cfg.apply.mode == "manual":
+                lines.append("ℹ️ Manual mode: tap Apply on JobStreet cards in /jobs to queue them")
+            elif cfg.apply.mode == "dry_run":
+                lines.append("ℹ️ Dry run mode never submits")
+        for r in [r for r in apps if r["state"] == Q.FAILED][:3]:
+            lines.append(f"{bad} Failed: {escape(r['title'])} — {escape(r['error'] or '?')}")
+        if states.get(Q.NEEDS_INPUT):
+            lines.append(f"❓ {states[Q.NEEDS_INPUT]} waiting on your answers (/questions)")
+
+        # 5. caps / pause
+        pacer = Pacer(cfg.apply, db, site_caps=A.site_caps(cfg))
+        if reason := pacer.blocked_reason("jobstreet"):
+            lines.append(f"⏸ {escape(reason)}")
+            blockers.append(reason)
+        else:
+            lines.append(f"{ok} Limits: today {pacer.applied_today('jobstreet')}/{js.daily_cap}, "
+                         f"this hour {pacer.applied_this_hour('jobstreet')}/{js.hourly_cap}")
+
+        # 6. last JobStreet events
+        events = db.conn.execute(
+            "SELECT ts, type, payload FROM events WHERE json_extract(payload, '$.source') = 'jobstreet' "
+            "AND type LIKE 'application_%' ORDER BY ts DESC LIMIT 3").fetchall()
+        if events:
+            lines.append("Recent: " + "; ".join(
+                f"{e['type'].removeprefix('application_')} {e['ts'][5:16].replace('T', ' ')}"
+                for e in events))
+
+        head = ("🟢 Nothing is blocking JobStreet." if not blockers else
+                "🔴 Blocking: " + "; ".join(escape(b) for b in blockers))
+        return "\n".join([lines[0], head, *lines[1:]])
+
+    def _cmd_config(self, args: str) -> str:
+        """/config section.key value: edit config.yml in place (takes effect after /restart)."""
+        from mcf_autoapply.config import load_config
+        from mcf_autoapply.setup import set_section_value
+
+        parts = args.split(maxsplit=1)
+        if len(parts) != 2 or "." not in parts[0]:
+            return ("Use /config &lt;section.key&gt; &lt;value&gt;, e.g.\n"
+                    "/config apply.auto_apply_min_score 55\n/config apply.delay_seconds [45, 100]\n"
+                    "/config jobstreet.enabled true")
+        section, key = parts[0].split(".", 1)
+        value = parts[1].strip()
+        path = self.cfg.project_dir / "config.yml"
+        if not path.exists():
+            return f"config.yml not found at {escape(str(path))}."
+        text = path.read_text(encoding="utf-8")
+        new, changed = set_section_value(text, section, key, value)
+        if not changed:
+            if set_section_value(text, section, key, "__probe__")[1]:   # key exists, same value
+                return f"{section}.{key} is already {escape(value)}."
+            return f"Couldn't find <code>{key}</code> under <code>{section}:</code> in config.yml."
+        backup = path.with_suffix(".yml.bak")
+        backup.write_text(text, encoding="utf-8")
+        path.write_text(new, encoding="utf-8")
+        try:
+            load_config(path)
+        except Exception as e:
+            path.write_text(text, encoding="utf-8")
+            return f"That value isn't valid ({escape(str(e)[:200])}); config.yml left unchanged."
+        return (f"✏️ config.yml: <code>{section}.{key}: {escape(value)}</code>. "
+                "Send /restart to load it.")
 
     def mode_text(self, changed: bool = False) -> str:
         mode = self.cfg.apply.mode

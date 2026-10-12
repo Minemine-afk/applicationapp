@@ -117,6 +117,9 @@ def run(
 
         if outcome.state == LOGGED_OUT:
             stopped_sites[source] = outcome.detail
+            db.set_state(f"{source}:login", "out")
+            db.log(None, "logged_out", {"source": source, "detail": outcome.detail})
+            db.commit()
             continue
         if outcome.state == CAPTCHA:
             pacer.pause(f"CAPTCHA seen while applying to '{app['title']}'")

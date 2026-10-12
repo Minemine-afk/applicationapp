@@ -126,6 +126,9 @@ a login in progress is waited out, since it's waiting on you.
 | `/limits [h d]` | Show or set the per-hour and per-day caps (max 20/150); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
 | `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in |
 | `/jobstreet on\|off` | Turn the JobStreet source on or off (off by default; see below) |
+| `/jobstreet check` | What's stopping JobStreet applications: switch, login, search block, queue, auto-mode permission, caps, recent outcomes |
+| `/jobstreet auto on\|off` | Let 🤖 Auto mode queue JobStreet jobs by itself (off by default) |
+| `/config section.key value` | Edit a setting in config.yml from your phone (backup kept as config.yml.bak); `/restart` to load it |
 | `/update` | Pull the latest version and restart (the Windows start script reinstalls and restarts it) |
 | `/queue` | What's still to be submitted, and what was applied to today |
 | `/restart` | Restart mcf-apply |

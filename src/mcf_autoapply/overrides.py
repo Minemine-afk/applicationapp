@@ -12,6 +12,7 @@ DAILY_KEY = "override:apply.daily_cap"
 JS_ENABLED_KEY = "override:jobstreet.enabled"
 JS_HOURLY_KEY = "override:jobstreet.hourly_cap"
 JS_DAILY_KEY = "override:jobstreet.daily_cap"
+JS_AUTO_KEY = "override:jobstreet.allow_auto"
 MAX_HOURLY, MAX_DAILY = 20, 150
 MAX_JS_HOURLY, MAX_JS_DAILY = 5, 20     # JobStreet forbids automation; keep it quiet
 
@@ -30,6 +31,8 @@ def apply_overrides(cfg: Config, db: Database) -> Config:
         cfg.jobstreet.hourly_cap = int(hourly)
     if daily := db.get_state(JS_DAILY_KEY):
         cfg.jobstreet.daily_cap = int(daily)
+    if (auto := db.get_state(JS_AUTO_KEY)) in ("on", "off"):
+        cfg.jobstreet.allow_auto = auto == "on"
     return cfg
 
 
@@ -62,6 +65,14 @@ def set_mode(cfg: Config, db: Database, mode: str) -> None:
     db.log(None, "mode_changed", {"mode": mode})
     db.commit()
     cfg.apply.mode = mode
+
+
+def set_jobstreet_auto(cfg: Config, db: Database, allow: bool) -> None:
+    """Whether auto mode may approve JobStreet jobs by itself (jobstreet.allow_auto)."""
+    db.set_state(JS_AUTO_KEY, "on" if allow else "off")
+    db.log(None, "jobstreet_auto_toggled", {"allow_auto": allow})
+    db.commit()
+    cfg.jobstreet.allow_auto = allow
 
 
 def set_jobstreet_enabled(cfg: Config, db: Database, enabled: bool) -> None:
