@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -50,6 +51,7 @@ def run(
     limit: int | None = None, sleep: Callable[[float], None] = time.sleep,
     pacer: Pacer | None = None, on_outcome: Callable[[str, Outcome], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> RunResult:
     """Apply to the queue. `applier_factory(source)` gives the applier for a site (older
     factories take no argument). A site that logs us out or hits its cap is skipped for the
@@ -72,7 +74,14 @@ def run(
     appliers: dict[str, Applier] = {}
     stopped_sites: dict[str, str] = {}
     first = True
-    for app in jobs:
+
+    def progress(text: str) -> None:
+        if on_progress:
+            done = Counter(o.state for _, o in result.outcomes)
+            on_progress(f"{text} · so far ✅ {done.get(Q.APPLIED, 0) + done.get(Q.DRY_RUN_OK, 0)}"
+                        f" ❌ {done.get(Q.FAILED, 0)}")
+
+    for i, app in enumerate(jobs, 1):
         if should_stop and should_stop():
             result.stopped = INTERRUPTED
             break
@@ -86,11 +95,14 @@ def run(
             result.stopped = reason
             break
         if not first:
-            sleep(random.uniform(*DRY_RUN_DELAY_S) if dry_run else pacer.delay_seconds())
+            wait = random.uniform(*DRY_RUN_DELAY_S) if dry_run else pacer.delay_seconds()
+            progress(f"waiting {wait:.0f} s before job {i}/{len(jobs)}: {app['title']}")
+            sleep(wait)
             if should_stop and should_stop():
                 result.stopped = INTERRUPTED
                 break
         first = False
+        progress(f"{'dry-running' if dry_run else 'applying to'} job {i}/{len(jobs)}: {app['title']}")
         if source not in appliers:
             try:
                 appliers[source] = applier_factory(source)

@@ -147,14 +147,19 @@ def test_pacer_hours_and_caps(tmp_path, db):
     assert fixed_pacer(cfg, db).blocked_reason() is None
     assert "active hours" in fixed_pacer(cfg, db, NOON.replace(hour=23)).blocked_reason()
 
-    for minutes in (10, 20):
+    # Two submissions a few minutes past 12:00, like an hourly run makes.
+    for minutes in (3, 6):
         db.conn.execute("INSERT INTO events (ts, type) VALUES (?, ?)",
-                        ((NOON - timedelta(minutes=minutes)).astimezone(timezone.utc).isoformat(),
+                        ((NOON + timedelta(minutes=minutes)).astimezone(timezone.utc).isoformat(),
                          APPLIED_EVENT))
-    pacer = fixed_pacer(cfg, db)
+    pacer = fixed_pacer(cfg, db, NOON + timedelta(minutes=30))
     assert pacer.remaining() == 0 and "hourly cap" in pacer.blocked_reason()
+    # The 13:00 run must not be blocked by them (a sliding 60-min window did that: every
+    # other hourly run applied nothing).
+    next_run = fixed_pacer(cfg, db, NOON + timedelta(hours=1))
+    assert next_run.applied_this_hour() == 0 and next_run.remaining() == 1   # daily 3, 2 used
     later = fixed_pacer(cfg, db, NOON + timedelta(hours=2))
-    assert later.remaining() == 1          # daily cap 3, 2 used today
+    assert later.remaining() == 1
 
 
 def test_ramp_steps_up_weekly_and_restarts_after_pause(tmp_path, db):

@@ -224,3 +224,42 @@ def test_apply_round_stops_between_jobs_when_asked(tmp_path, job_factory):
                    should_stop=lambda: len(calls) >= stop_after)
     assert len(calls) == 1 and result.stopped == A.INTERRUPTED
     assert len(A.pending(db, dry_run=False)) == 2      # the rest waits for the next round
+
+
+def test_status_summarises_the_running_task(cfg, db, tg):
+    """/status during a run says what the run is doing right now, not just "busy"."""
+    from mcf_autoapply.runner import TaskRunner
+    tasks = TaskRunner({"run": lambda: None}, lambda m: None, background=False)
+    notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    notifier.progress = tasks.progress.text
+    assert "💤 Idle" in notifier.status_text()
+    tasks.progress.start("run")
+    tasks.progress.set("applying to job 2/5: Graduate Engineer · so far ✅ 1 ❌ 0")
+    status = notifier.status_text()
+    assert "⏳ Busy: searching and applying (0 min in): applying to job 2/5" in status
+    tasks.progress.clear()
+    assert "Busy" not in notifier.status_text()
+
+
+def test_run_reports_progress_per_job(tmp_path, job_factory):
+    from datetime import time as dtime
+
+    from test_apply_flow import add_jobs, approve_all, make_cfg
+    from mcf_autoapply.mcf.applier import Outcome
+    from mcf_autoapply.pipeline import apply as A
+    from mcf_autoapply.pipeline import queue as Q
+
+    cfg = make_cfg(tmp_path, mode="manual")
+    cfg.apply.active_hours = (dtime(0, 0), dtime(23, 59, 59))
+    db = Database(":memory:")
+    approve_all(db, cfg, add_jobs(db, cfg, job_factory, 2))
+    seen = []
+
+    class FakeApplier:
+        def apply(self, *a):
+            return Outcome(Q.APPLIED)
+
+    A.run(cfg, db, lambda s: FakeApplier(), dry_run=False, sleep=lambda s: None,
+          on_progress=seen.append)
+    assert seen[0].startswith("applying to job 1/2:") and "so far ✅ 0 ❌ 0" in seen[0]
+    assert seen[1].startswith("waiting ") and "before job 2/2" in seen[1] and "✅ 1" in seen[1]

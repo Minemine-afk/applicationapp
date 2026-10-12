@@ -16,7 +16,7 @@ from mcf_autoapply.overrides import apply_overrides
 from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import AnswerBank
 from mcf_autoapply.pipeline.discover import discover
-from mcf_autoapply.sources import short_id, source_of
+from mcf_autoapply.sources import LABELS, short_id, source_of
 
 Log = Callable[[str], None]   # receives rich markup
 
@@ -46,8 +46,42 @@ def _sleeper(stop: Stop):
     return sleep
 
 
+OnProgress = Callable[[str], None] | None
+
+
+class Progress:
+    """A one-line, thread-safe summary of what the background task is doing (for /status)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.task: str | None = None
+        self.detail: str | None = None
+        self.since: float | None = None
+
+    def start(self, task: str) -> None:
+        with self._lock:
+            self.task, self.detail, self.since = task, None, time.monotonic()
+
+    def set(self, detail: str) -> None:
+        with self._lock:
+            self.detail = detail
+
+    def clear(self) -> None:
+        with self._lock:
+            self.task = self.detail = self.since = None
+
+    def text(self) -> str | None:
+        with self._lock:
+            if not self.task:
+                return None
+            minutes = int((time.monotonic() - (self.since or 0)) // 60)
+            head = f"{ACTIVITY.get(self.task, self.task)} ({minutes} min in)"
+            return f"{head}: {self.detail}" if self.detail else head
+
+
 def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
-                headless: bool | None, log: Log, stop: Stop = None):
+                headless: bool | None, log: Log, stop: Stop = None,
+                on_progress: OnProgress = None):
     """Apply to queued jobs in a browser. Returns the RunResult, or None if nothing queued."""
     from mcf_autoapply.jobstreet.applier import JobStreetApplier
     from mcf_autoapply.mcf.applier import Applier
@@ -71,9 +105,13 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
         log(f"{styled_state(outcome.state)} {title}  [dim]{outcome.detail}[/dim]")
 
     log(f"{'Submitting' if live else 'Dry run (no submissions)'}: up to {len(jobs)} job(s)…")
+    if on_progress:
+        on_progress(f"opening the browser for {len(jobs)} queued job(s)")
     with open_page(cfg.apply, headless=headless) as page:
         skipped = []
         for site in sorted(sites):
+            if on_progress:
+                on_progress(f"checking {LABELS.get(site, site)}'s applied-jobs list")
             skipped += sync_applied_jobs(page, db, log, site)
         if skipped:
             log(f"Skipped {len(skipped)} queued job(s) already listed as applied: "
@@ -86,7 +124,7 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
             return Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live)
 
         result = A.run(cfg, db, applier_for, dry_run=not live, limit=limit, on_outcome=show,
-                       should_stop=stop, sleep=_sleeper(stop))
+                       should_stop=stop, sleep=_sleeper(stop), on_progress=on_progress)
     result.skipped_applied = skipped
     if result.stopped:
         log(f"[yellow]Stopped: {result.stopped}[/yellow]")
@@ -159,13 +197,16 @@ def finish_notifications(notifier: Notifier, result, log: Log, new_passed: int =
 
 
 def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
-             headless: bool | None = True, handle_taps: bool = True, stop: Stop = None) -> None:
+             headless: bool | None = True, handle_taps: bool = True, stop: Stop = None,
+             on_progress: OnProgress = None) -> None:
     apply_overrides(cfg, db)   # e.g. /mode set from Telegram
     if handle_taps:
         for done in notifier.handle_updates():   # taps since the last run
             log(f"Telegram: {done}")
     with MCFClient(cfg.discovery.requests_per_second) as client:
-        found = discover(cfg, db, client, should_stop=stop)
+        found = discover(cfg, db, client, should_stop=stop, on_progress=on_progress)
+        if on_progress:
+            on_progress(f"search done ({len(found.new_uuids)} new); picking jobs to queue")
         log(f"Discovered {len(found.new_uuids)} new, {len(found.new_passed)} passed filters.")
         for problem in found.problems:
             log(f"[yellow]{problem}[/yellow]")
@@ -179,7 +220,8 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
     if stop and stop():
         log("[yellow]Run interrupted by a Telegram command before applying.[/yellow]")
         return
-    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop)
+    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop,
+                         on_progress=on_progress)
     finish_notifications(notifier, result, log, len(found.new_passed),
                          sum(d.state == Q.APPROVED for d in decisions), cfg=cfg, db=db)
 
@@ -207,10 +249,12 @@ def sync_applied_jobs(page, db: Database, log: Log, site: str = "mcf") -> list[s
 
 
 def apply_only(cfg: Config, db: Database, notifier: Notifier, log: Log,
-               headless: bool | None = True, stop: Stop = None) -> None:
+               headless: bool | None = True, stop: Stop = None,
+               on_progress: OnProgress = None) -> None:
     """Apply to what's already queued, without searching first (/apply)."""
     apply_overrides(cfg, db)
-    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop)
+    result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop,
+                         on_progress=on_progress)
     finish_notifications(notifier, result, log, cfg=cfg, db=db, kind="apply")
 
 
@@ -361,6 +405,7 @@ class TaskRunner:
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self.interrupt = threading.Event()   # set: the running task should stop between jobs
+        self.progress = Progress()           # what the running task is doing, for /status
         self._background = background
         if background:
             threading.Thread(target=self._loop, daemon=True, name="mcf-tasks").start()
@@ -426,17 +471,19 @@ class TaskRunner:
                     return
                 self.current = self._queue.pop(0)
                 self.interrupt.clear()
+                self.progress.start(self.current)
             try:
                 self.handlers[self.current]()
             except Exception as e:   # a failed task must never stop the service
                 self.log(f"[red]{self.current} failed: {e}[/red]\n{traceback.format_exc()}")
             finally:
+                self.progress.clear()
                 with self._lock:
                     self.current = None
 
 
 ACTIVITY = {"run": "searching and applying", "apply": "applying",
-            "login": "waiting for your Singpass login", "update": "updating"}
+            "login": "logging in", "update": "updating"}
 
 
 def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
@@ -471,7 +518,8 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         with worker_notifier() as (wdb, wn):
             try:
                 (run or (lambda: run_once(cfg, wdb, wn, log, handle_taps=False,
-                                          stop=tasks.should_stop)))()
+                                          stop=tasks.should_stop,
+                                          on_progress=tasks.progress.set)))()
             except Exception as e:   # a bad run must never stop the service
                 log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
                 wn.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
@@ -479,7 +527,8 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
     def apply_task() -> None:
         with worker_notifier() as (wdb, wn):
             try:
-                apply_only(cfg, wdb, wn, log, stop=tasks.should_stop)
+                apply_only(cfg, wdb, wn, log, stop=tasks.should_stop,
+                           on_progress=tasks.progress.set)
             except Exception as e:
                 log(f"[red]Apply failed: {e}[/red]\n{traceback.format_exc()}")
                 wn.alert("run_error", f"Applying failed: {type(e).__name__}: {e}")
@@ -492,9 +541,11 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
             if site == "jobstreet":
                 wn._send("Opening JobStreet's sign-in in a browser window on the PC. "
                          "Sign in there; nothing is typed for you.")
+                tasks.progress.set("JobStreet sign-in window open on the PC, waiting for you")
             else:
                 wn._send("Opening the Singpass login. The QR code will arrive here in a few "
                          "seconds. Tap it within a minute.")
+                tasks.progress.set("Singpass QR sent, waiting for your approval in the app")
             try:
                 ok = (do_login or (lambda: login(cfg, log, wn, site=site)))()
             except Exception as e:   # e.g. no display available
@@ -587,6 +638,7 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
             next_run = clock() + interval
             tasks.submit("run")
         notifier.activity = ACTIVITY.get(tasks.active) if tasks.active else None
+        notifier.progress = tasks.progress.text
         wait = max(1, min(50, next_run - clock()))
         if notifier.api is not None:   # linked, or waiting for /start to link
             for done in notifier.handle_updates(timeout=int(wait), commands=commands):

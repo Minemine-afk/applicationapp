@@ -65,6 +65,8 @@ class Notifier:
         self.errors: list[str] = []
         self._handlers: dict = {}
         self.activity: str | None = None   # set by serve while a background task runs
+        # Set by serve: returns a live one-line summary of the running task, or None.
+        self.progress: Callable[[], str | None] | None = None
 
     @classmethod
     def from_config(cls, cfg: Config, db: Database, **kwargs) -> Notifier:
@@ -590,13 +592,16 @@ class Notifier:
         lines = [f"<b>Mode</b> {MODE_LABELS[self.cfg.apply.mode]}"
                  + (" · JobStreet on" if self.cfg.jobstreet.enabled else ""),
                  f"Today {pacer.applied_today()}/{pacer.daily_cap()} · "
-                 f"last hour {pacer.applied_last_hour()}/{self.cfg.apply.hourly_cap}"]
+                 f"this hour {pacer.applied_this_hour()}/{self.cfg.apply.hourly_cap}"]
         lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]
         if reason := pacer.blocked_reason():
             lines.append(f"⏸ {escape(reason)}")
         lines += self._last_run_lines()
-        if self.activity:
-            lines.append(f"⏳ Busy: {self.activity}")
+        busy = (self.progress() if self.progress else None) or self.activity
+        if busy:
+            lines.append(f"⏳ Busy: {escape(busy)}")
+        elif self.progress:
+            lines.append("💤 Idle: waiting for the next run")
         if self.cfg.apply.mode == "dry_run" and counts.get(Q.APPROVED, 0) + counts.get(Q.DRY_RUN_OK, 0):
             lines.append("\nℹ️ Dry run mode never submits. When the screenshots look right, "
                          "send /mode and pick ✋ Manual to start applying.")

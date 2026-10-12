@@ -12,7 +12,7 @@ from mcf_autoapply.db import STATUS_DUPLICATE, STATUS_FILTERED, STATUS_NEW, Data
 from mcf_autoapply.models import job_from_row
 from mcf_autoapply.pipeline.filter import JobFilter, duplicate_key
 from mcf_autoapply.pipeline.score import Ranker
-from mcf_autoapply.sources import PRIORITY, Source, close_sources, open_sources
+from mcf_autoapply.sources import PRIORITY, SITE_NAMES, Source, close_sources, open_sources
 
 # Only phase-1 states are re-filtered; jobs that moved further along are left alone.
 FILTERABLE_STATUSES = (STATUS_NEW, STATUS_FILTERED, STATUS_DUPLICATE)
@@ -37,6 +37,7 @@ class DiscoveryResult:
 def discover(
     cfg: Config, db: Database, client=None, today: date | None = None,
     sources: dict[str, Source] | None = None, should_stop: Callable[[], bool] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> DiscoveryResult:
     """Search every enabled site for every saved search, store new jobs, then filter.
 
@@ -50,6 +51,8 @@ def discover(
     sources = sources or open_sources(cfg, db, mcf_client=client)
     enabled = set(cfg.enabled_sources()) | set(sources)
     skip: set[str] = set()   # sources that failed this run (e.g. blocked)
+    total = sum(len(s.terms()) * len(s.sources or cfg.enabled_sources()) for s in cfg.searches)
+    done = 0
 
     try:
         for search in cfg.searches:
@@ -62,6 +65,10 @@ def discover(
                         result.problems.append("search interrupted by your Telegram command")
                         skip.update(sources)
                         break
+                    done += 1
+                    if on_progress:
+                        on_progress(f"searching {SITE_NAMES.get(name, name)} for “{term}” "
+                                    f"({done}/{total}) · {len(result.new_uuids)} new so far")
                     tr = TermResult(term, source=name)
                     result.terms.append(tr)
                     try:

@@ -258,7 +258,7 @@ def queue_cmd(
     pacer = Pacer(cfg.apply, db)
     console.print(
         f"Mode [bold]{cfg.apply.mode}[/bold]  ·  today {pacer.applied_today()}/{pacer.daily_cap()}"
-        f"  ·  last hour {pacer.applied_last_hour()}/{cfg.apply.hourly_cap}"
+        f"  ·  this hour {pacer.applied_this_hour()}/{cfg.apply.hourly_cap}"
         + (f"  ·  [red]{pacer.blocked_reason()}[/red]" if pacer.blocked_reason() else "")
     )
     db.close()

@@ -46,17 +46,26 @@ class Pacer:
         midnight = self.now().replace(hour=0, minute=0, second=0, microsecond=0)
         return self.db.count_events(APPLIED_EVENT, midnight, source)
 
-    def applied_last_hour(self, source: str | None = None) -> int:
-        return self.db.count_events(APPLIED_EVENT, self.now() - timedelta(hours=1), source)
+    def applied_this_hour(self, source: str | None = None) -> int:
+        """Submissions since the top of the current clock hour.
+
+        Not a sliding 60-minute window: with a run every hour, the previous run's
+        submissions (made a few minutes past the hour) would still be inside that window
+        when the next run started, so every other run applied nothing.
+        """
+        top = self.now().replace(minute=0, second=0, microsecond=0)
+        return self.db.count_events(APPLIED_EVENT, top, source)
+
+    applied_last_hour = applied_this_hour   # older name
 
     def remaining(self, source: str | None = None) -> int:
         """How many more submissions are allowed right now (for one site, if given)."""
         left = min(self.daily_cap() - self.applied_today(),
-                   self.rules.hourly_cap - self.applied_last_hour())
+                   self.rules.hourly_cap - self.applied_this_hour())
         if source in self.site_caps:
             hourly, daily = self.site_caps[source]
             left = min(left, daily - self.applied_today(source),
-                       hourly - self.applied_last_hour(source))
+                       hourly - self.applied_this_hour(source))
         return max(0, left)
 
     def blocked_reason(self, source: str | None = None) -> str | None:
@@ -68,13 +77,13 @@ class Pacer:
             return f"outside active hours ({start:%H:%M}–{end:%H:%M} {self.rules.timezone})"
         if self.applied_today() >= self.daily_cap():
             return f"daily cap reached ({self.daily_cap()})"
-        if self.applied_last_hour() >= self.rules.hourly_cap:
+        if self.applied_this_hour() >= self.rules.hourly_cap:
             return f"hourly cap reached ({self.rules.hourly_cap})"
         if source in self.site_caps:
             hourly, daily = self.site_caps[source]
             if self.applied_today(source) >= daily:
                 return f"{source} daily cap reached ({daily})"
-            if self.applied_last_hour(source) >= hourly:
+            if self.applied_this_hour(source) >= hourly:
                 return f"{source} hourly cap reached ({hourly})"
         return None
 
