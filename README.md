@@ -124,7 +124,7 @@ a login in progress is waited out, since it's waiting on you.
 | `/run` | Search and apply now |
 | `/run [mcf\|jobstreet]` | Search and apply now, on every site or just one |
 | `/apply [mcf\|jobstreet]` | Apply to the queue now, without searching first |
-| `/limits [h d]` | Show or set the per-hour and per-day caps (max 20/150); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
+| `/limits [h d]` | Show or set the per-hour and per-day caps (max 30/300); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
 | `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in |
 | `/jobstreet on\|off` | Turn the JobStreet source on or off (off by default; see below) |
 | `/jobstreet check` | What's stopping JobStreet applications: switch, login, search block, queue, auto-mode permission, caps, recent outcomes |
@@ -148,7 +148,7 @@ submissions pause. Only the linked chat is obeyed. `/login` and `/run` need `mcf
 - **Answers:** screening answers only come from `answers.yml`. A job with an unanswered question
   waits in `needs_input` and is never guessed.
 - **Pacing:** submissions happen only within `active_hours`, at most `hourly_cap` per hour, with
-  a random 45–100 s gap. The daily cap starts at 50 and rises weekly to 100 (`ramp`). Jobs the
+  a random 45–100 s gap. The daily cap starts at 85 and rises weekly to 170 (`ramp`). Jobs the
   hourly cap holds back are applied to at the top of the next hour, not at the next scheduled run.
 - **Automatic pause:** a CAPTCHA or repeated failures pause all submissions until you run
   `mcf-apply unpause`. The daily cap then restarts at the bottom of the ramp.

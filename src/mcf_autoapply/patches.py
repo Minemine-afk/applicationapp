@@ -114,11 +114,21 @@ def jobstreet_auto_2026_10_12d(cfg: Config, db: Database) -> list[str]:
                    f"{cfg.jobstreet.hourly_cap}/hour, {cfg.jobstreet.daily_cap}/day limits)"]
 
 
+def limits_20_per_hour_2026_10_12e(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat: MCF 20/hour, daily raised in proportion (100 → 170), same 45–100 s gap."""
+    done = edit_config(cfg, [("apply", "hourly_cap", "20"), ("apply", "daily_cap", "170"),
+                             ("apply", "ramp", "[85, 130, 170]")])
+    set_limits(cfg, db, 20, 170)
+    return done + ["limits: 20/hour, 170/day (as /limits 20 170 would); gap between submissions "
+                   f"stays {int(cfg.apply.delay_seconds[0])}–{int(cfg.apply.delay_seconds[1])} s"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
     ("2026-10-12c-experience-0-1", experience_0_to_1_2026_10_12c),
     ("2026-10-12d-jobstreet-auto", jobstreet_auto_2026_10_12d),
+    ("2026-10-12e-limits-20-170", limits_20_per_hour_2026_10_12e),
 ]
 
 

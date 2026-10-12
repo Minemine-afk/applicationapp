@@ -195,12 +195,12 @@ def test_requested_settings_patch_runs_once(ctx, tmp_path):
     (tmp_path / "config.yml").write_text(text.replace("auto_apply_min_score: 55", "auto_apply_min_score: 70")
                                          .replace("delay_seconds: [45, 100]", "delay_seconds: [45, 120]"))
     report = apply_patches(cfg, db)
-    assert len(report) == 4 and "apply.auto_apply_min_score: 55" in report[0]
+    assert len(report) == 5 and "apply.auto_apply_min_score: 55" in report[0]
     new = (tmp_path / "config.yml").read_text()
     assert "auto_apply_min_score: 35\n" in new and "delay_seconds: [45, 100] " in new   # 2nd patch: 35
     assert "  enabled: true\n" in new.split("jobstreet:")[1]
     assert cfg.apply.auto_apply_min_score == 35 and cfg.apply.delay_seconds == (45, 100)
-    assert cfg.jobstreet.enabled and (cfg.apply.hourly_cap, cfg.apply.daily_cap) == (12, 100)
+    assert cfg.jobstreet.enabled and (cfg.apply.hourly_cap, cfg.apply.daily_cap) == (20, 170)   # 5th patch
     assert apply_patches(cfg, db) == []            # never twice
 
 
