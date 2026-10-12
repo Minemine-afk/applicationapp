@@ -384,8 +384,9 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
             log(summary)
             wn._send(summary)
             if changed:
-                wn._send("♻️ Restarting to load the update. Back in about a minute "
-                         "(\"🟢 mcf-apply is running\" means it worked).")
+                wn._send("♻️ Restarting to load the update: the start script reinstalls it "
+                         "first. Back in a minute or two (\"🟢 mcf-apply is running\" means "
+                         "it worked).")
         if changed:
             (do_restart or updater.restart)()
 

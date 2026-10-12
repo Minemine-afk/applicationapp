@@ -1,5 +1,7 @@
 """/jobstreet on|off and /update from Telegram."""
 
+from pathlib import Path
+
 import pytest
 import respx
 
@@ -102,3 +104,14 @@ def test_run_update_reports_a_real_git_checkout(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     summary, changed = run_update(tmp_path)        # no remote: pull fails cleanly
     assert summary.startswith("❌ git pull failed") and changed is False
+
+
+def test_update_never_reinstalls_while_running():
+    """pip install -e while mcf-apply runs removed the package under it (crash loop with
+    "No module named 'mcf_autoapply'"). The start script reinstalls before each launch instead."""
+    import inspect
+
+    from mcf_autoapply import updater
+    assert "pip" not in inspect.getsource(updater.run_update)
+    script = (Path(__file__).parents[1] / "scripts" / "start-serve-windows.cmd").read_text()
+    assert script.index("pip install -q -e .") < script.index("mcf-apply.exe\" serve")

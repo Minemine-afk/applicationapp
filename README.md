@@ -121,7 +121,7 @@ also makes mcf-apply start when you log in. Then keep `mcf-apply serve` running 
 | `/limits [h d]` | Show or set the per-hour and per-day caps (max 10/60); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
 | `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in |
 | `/jobstreet on\|off` | Turn the JobStreet source on or off (off by default; see below) |
-| `/update` | Pull the latest version, reinstall and restart (the Windows start script restarts it) |
+| `/update` | Pull the latest version and restart (the Windows start script reinstalls and restarts it) |
 | `/restart` | Restart mcf-apply |
 | `/queue`, `/status` | Queue, today's count, pause state |
 | `/pause`, `/resume` | Stop or restart submissions |

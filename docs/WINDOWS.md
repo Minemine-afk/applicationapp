@@ -84,9 +84,9 @@ already applied to (even by hand), and reposts of them, are skipped automaticall
   called **mcf-apply** should appear in the taskbar.
 - **Stop it for good:** close the mcf-apply window, and delete `mcf-apply.cmd` from the Startup
   folder (Win+R → `shell:startup`).
-- **Update to the latest version:** send **/update** to the bot. It pulls the new code,
-  reinstalls, and restarts itself; "🟢 mcf-apply is running" means it's back. If the bot isn't
-  answering at all, do it in PowerShell instead:
+- **Update to the latest version:** send **/update** to the bot. It pulls the new code and
+  restarts; the start script reinstalls it before starting, and "🟢 mcf-apply is running" means
+  it's back. If the bot isn't answering at all, do it in PowerShell instead:
   ```powershell
   cd $HOME\applicationapp
   git pull
@@ -94,6 +94,10 @@ already applied to (even by hand), and reposts of them, are skipped automaticall
   .venv\Scripts\mcf-apply setup
   ```
   Setup is safe to re-run: it keeps your settings and answers.
+- **The mcf-apply window keeps printing `ModuleNotFoundError: No module named 'mcf_autoapply'`:**
+  the install was removed while the app was running (older versions of /update did this). Close
+  that window, then in PowerShell run the four lines above; the new start script reinstalls
+  before every start so it can't happen again.
 - **Send the developer a failure:** the screenshot and page file are in `data\screenshots`.
 - **JobStreet:** off by default (its rules forbid automation; see README → JobStreet). Send
   **/jobstreet on**, then **/login jobstreet** and sign in in the window that opens on the PC.
