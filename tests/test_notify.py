@@ -335,3 +335,29 @@ def test_limits_command_shows_and_sets_caps(setup, tg):
     cfg.apply.hourly_cap, cfg.apply.daily_cap, cfg.apply.ramp = 4, 15, [15, 25, 40]
     apply_overrides(cfg, db)
     assert (cfg.apply.hourly_cap, cfg.apply.daily_cap, cfg.apply.ramp) == (6, 30, [])
+
+
+def test_silent_run_explains_why_nothing_was_applied(setup, tg):
+    """A run that applies nothing used to send nothing at all."""
+    from mcf_autoapply.pipeline.apply import RunResult
+    from mcf_autoapply.runner import finish_notifications
+    cfg, db, notifier, jobs, _ = setup
+    cfg.apply.mode = "manual"
+    finish_notifications(notifier, None, lambda m: None, cfg=cfg, db=db)   # nothing queued
+    text = tg.sent()[-1]["text"]
+    assert "Nothing applied: nothing is queued" in text and "Manual mode" in text
+    status = notifier.status_text()
+    assert "Last run" in status and "nothing is queued" in status
+
+    before = len(tg.sent())
+    finish_notifications(notifier, None, lambda m: None, cfg=cfg, db=db)
+    assert len(tg.sent()) == before            # same reason again: not repeated for hours
+
+    cfg.apply.mode = "auto"
+    finish_notifications(notifier, None, lambda m: None, cfg=cfg, db=db)
+    assert "no new job scored 80 or more" in tg.sent()[-1]["text"]
+
+    from mcf_autoapply.mcf.applier import Outcome
+    result = RunResult(dry_run=False, outcomes=[("Job", Outcome(Q.APPLIED))])
+    finish_notifications(notifier, result, lambda m: None, cfg=cfg, db=db)
+    assert "1 applied" in notifier.status_text()

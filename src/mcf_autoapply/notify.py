@@ -594,12 +594,31 @@ class Notifier:
         lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]
         if reason := pacer.blocked_reason():
             lines.append(f"⏸ {escape(reason)}")
+        lines += self._last_run_lines()
         if self.activity:
             lines.append(f"⏳ Busy: {self.activity}")
         if self.cfg.apply.mode == "dry_run" and counts.get(Q.APPROVED, 0) + counts.get(Q.DRY_RUN_OK, 0):
             lines.append("\nℹ️ Dry run mode never submits. When the screenshots look right, "
                          "send /mode and pick ✋ Manual to start applying.")
         return "\n".join(lines)
+
+    def _last_run_lines(self) -> list[str]:
+        """What the last run did and, if it applied nothing, why (recorded by the runner)."""
+        raw = self.db.get_state("last_run")
+        if not raw:
+            return ["No run yet."]
+        try:
+            last = json.loads(raw)
+            at = datetime.fromisoformat(last["at"]).astimezone(ZoneInfo(self.cfg.apply.timezone))
+        except Exception:
+            return []
+        ago = int((datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])).total_seconds() // 60)
+        did = ", ".join(f"{last.get(k, 0)} {k.replace('_', ' ')}"
+                        for k in ("applied", "dry_run", "failed") if last.get(k))
+        lines = [f"Last {last.get('kind', 'run')} {at:%H:%M} ({ago} min ago): {did or 'nothing applied'}"]
+        if last.get("idle_reason"):
+            lines.append(f"↳ {escape(last['idle_reason'])}")
+        return lines
 
 
 def job_card(job) -> str:

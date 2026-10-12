@@ -78,10 +78,62 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
     return result
 
 
+LAST_RUN_KEY = "last_run"
+
+
+def idle_reason(cfg: Config, db: Database, result) -> str | None:
+    """Why a run submitted nothing, in plain words; None if it did submit (or dry-ran) jobs."""
+    from mcf_autoapply.pipeline import apply as A
+    from mcf_autoapply.pipeline.pacer import Pacer
+
+    if result is not None and result.outcomes:
+        return None
+    if result is not None and result.stopped:
+        return result.stopped
+    if cfg.apply.mode == "dry_run":
+        return "mode is dry run, which never submits (send /mode and pick Manual or Auto)"
+    if reason := Pacer(cfg.apply, db, site_caps=A.site_caps(cfg)).blocked_reason():
+        return reason
+    if not A.pending(db, False, jobstreet=cfg.jobstreet.enabled):
+        if cfg.apply.mode == "manual":
+            return ("nothing is queued: in Manual mode only jobs you tap Apply on are submitted "
+                    "(see /jobs), or send /mode and pick Auto")
+        return (f"nothing is queued: no new job scored {cfg.apply.auto_apply_min_score} or more "
+                "(auto_apply_min_score in config.yml); tap Apply on /jobs cards to queue more")
+    return "nothing was attempted"
+
+
+def record_run(cfg: Config, db: Database, notifier: Notifier, result, kind: str = "run",
+               new_passed: int = 0, auto_approved: int = 0) -> str | None:
+    """Remember what the last run did (for /status) and say why nothing was applied, once."""
+    import json
+    from datetime import datetime, timezone
+
+    reason = idle_reason(cfg, db, result)
+    outcomes = result.outcomes if result else []
+    db.set_state(LAST_RUN_KEY, json.dumps({
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "kind": kind,
+        "new_passed": new_passed, "auto_approved": auto_approved,
+        "applied": sum(o.state == Q.APPLIED for _, o in outcomes),
+        "dry_run": sum(o.state == Q.DRY_RUN_OK for _, o in outcomes),
+        "failed": sum(o.state == Q.FAILED for _, o in outcomes),
+        "idle_reason": reason,
+    }))
+    db.commit()
+    if reason and not (result and result.stopped):   # stops are reported by report_stop
+        key = f"idle:{cfg.apply.mode}:" + reason.split(":")[0].split(" (")[0]
+        notifier.alert(key, f"Nothing applied: {reason}.")
+    return reason
+
+
 def finish_notifications(notifier: Notifier, result, log: Log, new_passed: int = 0,
-                         auto_approved: int = 0) -> None:
+                         auto_approved: int = 0, cfg: Config | None = None,
+                         db: Database | None = None, kind: str = "run") -> None:
     notifier.run_summary(new_passed, auto_approved, result)
     notifier.report_stop(result.stopped if result else None)
+    if cfg is not None and db is not None:
+        if reason := record_run(cfg, db, notifier, result, kind, new_passed, auto_approved):
+            log(f"[yellow]Nothing applied: {reason}[/yellow]")
     for err in notifier.errors:
         log(f"[yellow]Telegram: {err}[/yellow]")
     notifier.errors.clear()
@@ -107,7 +159,7 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
     notifier.send_review_cards()
     result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log)
     finish_notifications(notifier, result, log, len(found.new_passed),
-                         sum(d.state == Q.APPROVED for d in decisions))
+                         sum(d.state == Q.APPROVED for d in decisions), cfg=cfg, db=db)
 
 
 def sync_applied_jobs(page, db: Database, log: Log, site: str = "mcf") -> list[str]:
@@ -137,7 +189,7 @@ def apply_only(cfg: Config, db: Database, notifier: Notifier, log: Log,
     """Apply to what's already queued, without searching first (/apply)."""
     apply_overrides(cfg, db)
     result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log)
-    finish_notifications(notifier, result, log)
+    finish_notifications(notifier, result, log, cfg=cfg, db=db, kind="apply")
 
 
 def login(cfg: Config, log: Log, notifier: Notifier | None = None,
