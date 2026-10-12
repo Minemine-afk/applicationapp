@@ -593,6 +593,10 @@ class Notifier:
                  + (" · JobStreet on" if self.cfg.jobstreet.enabled else ""),
                  f"Today {pacer.applied_today()}/{pacer.daily_cap()} · "
                  f"this hour {pacer.applied_this_hour()}/{self.cfg.apply.hourly_cap}"]
+        if self.cfg.jobstreet.enabled:
+            js = self.cfg.jobstreet
+            lines.append(f"↳ of which JobStreet: today {pacer.applied_today('jobstreet')}/{js.daily_cap}"
+                         f" · this hour {pacer.applied_this_hour('jobstreet')}/{js.hourly_cap}")
         lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]
         if reason := pacer.blocked_reason():
             lines.append(f"⏸ {escape(reason)}")
