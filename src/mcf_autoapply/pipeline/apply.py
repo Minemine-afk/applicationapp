@@ -6,7 +6,7 @@ import json
 import random
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -30,16 +30,23 @@ class RunResult:
     skipped_applied: list[str] = field(default_factory=list)   # titles MCF already lists
 
 
-def pending(db: Database, dry_run: bool, limit: int | None = None, jobstreet: bool = True) -> list:
+def pending(db: Database, dry_run: bool, limit: int | None = None, jobstreet: bool = True,
+            sites: Iterable[str] | None = None) -> list:
     """Approved jobs to process, best score first. Live runs also take dry-run passes.
-    JobStreet jobs are held back while JobStreet is off."""
+    JobStreet jobs are held back while JobStreet is off; `sites` restricts to some sites."""
     states = [Q.APPROVED, Q.FAILED] + ([] if dry_run else [Q.DRY_RUN_OK])
     applied = db.applied_on_site_uuids()
+    allowed = set(sites) if sites is not None else None
     rows = [r for r in db.applications(states)
             if (r["state"] != Q.FAILED or r["attempts"] < Q.MAX_ATTEMPTS)
             and r["job_uuid"] not in applied
-            and (jobstreet or source_of(r["job_uuid"]) != "jobstreet")]
+            and (jobstreet or source_of(r["job_uuid"]) != "jobstreet")
+            and (allowed is None or source_of(r["job_uuid"]) in allowed)]
     return rows[:limit] if limit else rows
+
+
+def _is_cap(reason: str) -> bool:
+    return "cap reached" in reason
 
 
 def order_for_run(jobs: list, jobstreet_slots: int | None) -> list:
@@ -64,7 +71,7 @@ def run(
     limit: int | None = None, sleep: Callable[[float], None] = time.sleep,
     pacer: Pacer | None = None, on_outcome: Callable[[str, Outcome], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
-    on_progress: Callable[[str], None] | None = None,
+    on_progress: Callable[[str], None] | None = None, sites: Iterable[str] | None = None,
 ) -> RunResult:
     """Apply to the queue. `applier_factory(source)` gives the applier for a site (older
     factories take no argument). A site that logs us out or hits its cap is skipped for the
@@ -76,12 +83,13 @@ def run(
     result = RunResult(dry_run)
     Q.refresh_answers(db, AnswerBank(cfg.apply.answers_path))
 
-    if not dry_run and (reason := pacer.blocked_reason()):
-        result.stopped = reason
+    if not dry_run and (reason := pacer.blocked_reason()) and not _is_cap(reason):
+        result.stopped = reason          # paused / outside active hours: no site may apply
         return result
-    budget = limit if dry_run else min(limit or 10**6, pacer.remaining())
-    jobs = order_for_run(pending(db, dry_run, None, jobstreet=cfg.jobstreet.enabled),
-                         None if dry_run else pacer.remaining("jobstreet"))[:budget]
+    jobs = order_for_run(pending(db, dry_run, None, jobstreet=cfg.jobstreet.enabled, sites=sites),
+                         None if dry_run else pacer.remaining("jobstreet"))
+    if limit:
+        jobs = jobs[:limit]
     if not jobs:
         return result
 
@@ -103,7 +111,7 @@ def run(
         if source in stopped_sites:
             continue
         if not dry_run and (reason := pacer.blocked_reason(source)):
-            if reason.startswith(source):   # this site's own cap: skip just this site
+            if _is_cap(reason):   # each site has its own caps: skip just this site
                 stopped_sites[source] = reason
                 continue
             result.stopped = reason

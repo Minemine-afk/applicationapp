@@ -22,11 +22,13 @@ class FakeClock:
 
 @pytest.fixture
 def cfg(tmp_path):
-    return Config.model_validate({
+    cfg = Config.model_validate({
         "db_path": ":memory:", "searches": [{"query": "x"}],
         "apply": {"answers_path": str(tmp_path / "answers.yml")},
         "serve": {"interval_minutes": 60, "login_view_url": "http://pi.local:6080/vnc.html"},
     })
+    cfg.project_dir = tmp_path   # no config.yml here: start-up patches stay out of the tests
+    return cfg
 
 
 @pytest.fixture
@@ -310,3 +312,43 @@ def test_retry_time_is_set_only_when_the_hourly_cap_is_the_blocker(tmp_path, job
     db.commit()
     retry = hour_cap_retry_at(cfg, db)
     assert retry and retry.endswith(":01:00+00:00")           # a minute past the next hour
+
+
+def test_jobstreet_runs_on_its_own_schedule_when_on(cfg, db):
+    """MCF and JobStreet rounds are separate tasks on separate timers."""
+    from mcf_autoapply.overrides import set_jobstreet_enabled
+    from mcf_autoapply.runner import TaskRunner
+
+    set_jobstreet_enabled(cfg, db, True)
+    cfg.jobstreet.interval_minutes = 60
+    clock, names = FakeClock(), []
+    import mcf_autoapply.runner as R
+    original = R.TaskRunner.submit
+
+    def spy(self, name, *a, **k):
+        if name.startswith("run"):
+            names.append((name, clock()))
+        return original(self, name, *a, **k)
+    R.TaskRunner.submit = spy
+    try:
+        serve(cfg, db, Notifier(cfg, db, None, None), lambda m: None, clock=clock,
+              sleep=clock.sleep, run=lambda: None, max_loops=150, background=False)
+    finally:
+        R.TaskRunner.submit = original
+    mcf = [t for n, t in names if n == "run_mcf"]
+    js = [t for n, t in names if n == "run_jobstreet"]
+    assert mcf[:2] == [0, 3600] and js[0] == 1800 and js[1] - js[0] == 3600
+    assert not any(n == "run" for n, _ in names)
+
+
+def test_run_and_apply_take_a_site(cfg, db, tg):
+    from mcf_autoapply.overrides import set_jobstreet_enabled
+    set_jobstreet_enabled(cfg, db, True)
+    notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    tg.pending_updates += [message(1, "/run jobstreet"), message(2, "/apply mcf"),
+                           message(3, "/run mars")]
+    serve(cfg, db, notifier, lambda m: None, run=lambda: None, max_loops=1, background=False)
+    texts = [b["text"] for b in tg.sent()]
+    assert any(t.startswith("Starting a run on JobStreet now") for t in texts)
+    assert any(t.startswith("Applying to the queue on MCF now") for t in texts)
+    assert "Use /run, /run mcf or /run jobstreet." in texts

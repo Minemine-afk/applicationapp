@@ -237,3 +237,28 @@ def test_auto_mode_uses_the_lower_jobstreet_bar_only_when_allowed(tmp_path):
     assert Q.auto_approve(cfg, db, None, bank) == []            # allow_auto off
     cfg.jobstreet.allow_auto = True
     assert [d.job_uuid for d in Q.auto_approve(cfg, db, None, bank)] == ["js:1"]
+
+
+def test_jobstreet_caps_are_independent_of_the_main_caps(tmp_path, job_factory):
+    """JobStreet submissions don't eat MCF's budget and MCF's cap doesn't stop JobStreet."""
+    from datetime import time as dtime
+
+    from test_apply_flow import make_cfg
+    from mcf_autoapply.db import Database
+    from mcf_autoapply.pipeline.apply import site_caps
+    from mcf_autoapply.pipeline.pacer import APPLIED_EVENT, Pacer
+
+    cfg = make_cfg(tmp_path, hourly_cap=2, daily_cap=10)
+    cfg.apply.active_hours = (dtime(0, 0), dtime(23, 59, 59))
+    cfg.jobstreet.enabled, cfg.jobstreet.hourly_cap = True, 1
+    db = Database(":memory:")
+    for src in ("mcf", "mcf", "jobstreet"):
+        db.log(None, APPLIED_EVENT, {"source": src})
+    db.commit()
+    pacer = Pacer(cfg.apply, db, site_caps=site_caps(cfg))
+    assert pacer.applied_this_hour() == 2 and pacer.applied_this_hour("jobstreet") == 1
+    assert "hourly cap reached (2)" in pacer.blocked_reason()
+    assert "jobstreet hourly cap reached (1)" in pacer.blocked_reason("jobstreet")
+    db.log(None, APPLIED_EVENT, {"source": "jobstreet"})
+    db.commit()
+    assert pacer.applied_this_hour() == 2            # JobStreet's extra one isn't MCF's problem

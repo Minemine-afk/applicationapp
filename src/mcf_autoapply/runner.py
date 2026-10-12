@@ -80,9 +80,12 @@ class Progress:
             return f"{head}: {self.detail}" if self.detail else head
 
 
+Sites = list[str] | None   # which sites a run/apply covers; None = every enabled site
+
+
 def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
                 headless: bool | None, log: Log, stop: Stop = None,
-                on_progress: OnProgress = None):
+                on_progress: OnProgress = None, sites: Sites = None):
     """Apply to queued jobs in a browser. Returns the RunResult, or None if nothing queued."""
     from mcf_autoapply.jobstreet.applier import JobStreetApplier
     from mcf_autoapply.mcf.applier import Applier
@@ -93,7 +96,7 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
     if not dry_run and not live:
         log("[yellow]apply.mode is dry_run, so nothing will be submitted. "
             "Set it to manual or auto in config.yml to apply for real.[/yellow]")
-    jobs = A.pending(db, not live, limit, jobstreet=cfg.jobstreet.enabled)
+    jobs = A.pending(db, not live, limit, jobstreet=cfg.jobstreet.enabled, sites=sites)
     if not jobs:
         log("Nothing queued. Approve jobs with `mcf-apply approve <ID>`"
             + (" or let auto mode pick them." if cfg.apply.mode == "auto" else "."))
@@ -125,7 +128,8 @@ def apply_queue(cfg: Config, db: Database, dry_run: bool, limit: int | None,
             return Applier(page, cfg.apply.screenshots_dir, cfg.apply.resume_name, not live)
 
         result = A.run(cfg, db, applier_for, dry_run=not live, limit=limit, on_outcome=show,
-                       should_stop=stop, sleep=_sleeper(stop), on_progress=on_progress)
+                       should_stop=stop, sleep=_sleeper(stop), on_progress=on_progress,
+                       sites=sites)
     result.skipped_applied = skipped
     if result.stopped:
         log(f"[yellow]Stopped: {result.stopped}[/yellow]")
@@ -173,11 +177,18 @@ def hour_cap_retry_at(cfg: Config, db: Database) -> str | None:
 
     if cfg.apply.mode == "dry_run":
         return None
-    if not A.pending(db, False, jobstreet=cfg.jobstreet.enabled):
-        return None
     pacer = Pacer(cfg.apply, db, site_caps=A.site_caps(cfg))
-    reason = pacer.blocked_reason()
-    if not reason or not reason.startswith("hourly cap"):
+    # Each site has its own hourly cap: any site with queued jobs held back only by it counts.
+    held_back = False
+    for site in cfg.enabled_sources():
+        if not A.pending(db, False, jobstreet=cfg.jobstreet.enabled, sites=[site]):
+            continue
+        reason = pacer.blocked_reason(site)
+        if reason and "hourly cap" in reason:
+            held_back = True
+        elif reason is None:
+            return None   # a site could apply right now: not a cap problem
+    if not held_back:
         return None
     now = pacer.now()
     top = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1, minutes=1))
@@ -225,13 +236,25 @@ def finish_notifications(notifier: Notifier, result, log: Log, new_passed: int =
 
 def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
              headless: bool | None = True, handle_taps: bool = True, stop: Stop = None,
-             on_progress: OnProgress = None) -> None:
+             on_progress: OnProgress = None, sites: Sites = None) -> None:
+    """Search, queue and apply. `sites` limits it to some sites (JobStreet runs on its own
+    schedule when it's on, so the two never wait on each other)."""
+    from mcf_autoapply.sources import close_sources, open_sources
+
     apply_overrides(cfg, db)   # e.g. /mode set from Telegram
     if handle_taps:
         for done in notifier.handle_updates():   # taps since the last run
             log(f"Telegram: {done}")
     with MCFClient(cfg.discovery.requests_per_second) as client:
-        found = discover(cfg, db, client, should_stop=stop, on_progress=on_progress)
+        sources = open_sources(cfg, db, mcf_client=client)
+        if sites is not None:
+            close_sources({k: v for k, v in sources.items() if k not in sites})
+            sources = {k: v for k, v in sources.items() if k in sites}
+        try:
+            found = discover(cfg, db, client, sources=sources, should_stop=stop,
+                             on_progress=on_progress)
+        finally:
+            close_sources(sources)
         if on_progress:
             on_progress(f"search done ({len(found.new_uuids)} new); picking jobs to queue")
         log(f"Discovered {len(found.new_uuids)} new, {len(found.new_passed)} passed filters.")
@@ -248,7 +271,7 @@ def run_once(cfg: Config, db: Database, notifier: Notifier, log: Log,
         log("[yellow]Run interrupted by a Telegram command before applying.[/yellow]")
         return
     result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop,
-                         on_progress=on_progress)
+                         on_progress=on_progress, sites=sites)
     finish_notifications(notifier, result, log, len(found.new_passed),
                          sum(d.state == Q.APPROVED for d in decisions), cfg=cfg, db=db)
 
@@ -277,11 +300,11 @@ def sync_applied_jobs(page, db: Database, log: Log, site: str = "mcf") -> list[s
 
 def apply_only(cfg: Config, db: Database, notifier: Notifier, log: Log,
                headless: bool | None = True, stop: Stop = None,
-               on_progress: OnProgress = None) -> None:
+               on_progress: OnProgress = None, sites: Sites = None) -> None:
     """Apply to what's already queued, without searching first (/apply)."""
     apply_overrides(cfg, db)
     result = apply_queue(cfg, db, dry_run=False, limit=None, headless=headless, log=log, stop=stop,
-                         on_progress=on_progress)
+                         on_progress=on_progress, sites=sites)
     finish_notifications(notifier, result, log, cfg=cfg, db=db, kind="apply")
 
 
@@ -436,7 +459,7 @@ class TaskRunner:
     """
 
     # Tasks a Telegram command may cut short (they stop between jobs and resume later).
-    PREEMPTIBLE = ("run", "apply")
+    PREEMPTIBLE = ("run", "apply")   # prefixes: run, run_mcf, run_jobstreet, apply, …
 
     def __init__(self, handlers: dict[str, Callable[[], None]], log: Log,
                  background: bool = True) -> None:
@@ -454,6 +477,10 @@ class TaskRunner:
 
     def should_stop(self) -> bool:
         return self.interrupt.is_set()
+
+    @classmethod
+    def preemptible(cls, name: str | None) -> bool:
+        return bool(name) and name.startswith(cls.PREEMPTIBLE)
 
     def wait_idle(self, timeout: float) -> bool:
         """Ask the running task to stop and wait for the worker to go idle."""
@@ -485,7 +512,7 @@ class TaskRunner:
             if name == self.current or name in self._queue:
                 return "already"
             state = "queued" if self.busy else "started"
-            if preempt and self.current in self.PREEMPTIBLE:
+            if preempt and self.preemptible(self.current):
                 self.interrupt.set()
                 state = "preempting"
                 if self.current not in self._queue:
@@ -524,7 +551,9 @@ class TaskRunner:
                     self.current = None
 
 
-ACTIVITY = {"run": "searching and applying", "apply": "applying",
+ACTIVITY = {"run": "searching and applying", "run_mcf": "searching and applying on MCF",
+            "run_jobstreet": "searching and applying on JobStreet", "apply": "applying",
+            "apply_mcf": "applying on MCF", "apply_jobstreet": "applying on JobStreet",
             "login": "logging in", "update": "updating"}
 
 
@@ -538,6 +567,7 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
     commands are answered immediately, even mid-run.
     """
     interval = cfg.serve.interval_minutes * 60
+    js_interval = cfg.jobstreet.interval_minutes * 60
 
     @contextmanager
     def worker_notifier():
@@ -556,24 +586,28 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
             wn.close()
             wdb.close()
 
-    def run_task() -> None:
-        with worker_notifier() as (wdb, wn):
-            try:
-                (run or (lambda: run_once(cfg, wdb, wn, log, handle_taps=False,
-                                          stop=tasks.should_stop,
-                                          on_progress=tasks.progress.set)))()
-            except Exception as e:   # a bad run must never stop the service
-                log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
-                wn.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
+    def run_task(sites: Sites = None) -> Callable[[], None]:
+        def task() -> None:
+            with worker_notifier() as (wdb, wn):
+                try:
+                    (run or (lambda: run_once(cfg, wdb, wn, log, handle_taps=False,
+                                              stop=tasks.should_stop, sites=sites,
+                                              on_progress=tasks.progress.set)))()
+                except Exception as e:   # a bad run must never stop the service
+                    log(f"[red]Run failed: {e}[/red]\n{traceback.format_exc()}")
+                    wn.alert("run_error", f"A run failed: {type(e).__name__}: {e}")
+        return task
 
-    def apply_task() -> None:
-        with worker_notifier() as (wdb, wn):
-            try:
-                apply_only(cfg, wdb, wn, log, stop=tasks.should_stop,
-                           on_progress=tasks.progress.set)
-            except Exception as e:
-                log(f"[red]Apply failed: {e}[/red]\n{traceback.format_exc()}")
-                wn.alert("run_error", f"Applying failed: {type(e).__name__}: {e}")
+    def apply_task(sites: Sites = None) -> Callable[[], None]:
+        def task() -> None:
+            with worker_notifier() as (wdb, wn):
+                try:
+                    apply_only(cfg, wdb, wn, log, stop=tasks.should_stop, sites=sites,
+                               on_progress=tasks.progress.set)
+                except Exception as e:
+                    log(f"[red]Apply failed: {e}[/red]\n{traceback.format_exc()}")
+                    wn.alert("run_error", f"Applying failed: {type(e).__name__}: {e}")
+        return task
 
     login_site = {"site": "mcf"}
 
@@ -598,15 +632,20 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         if ok:
             tasks.submit("run")
 
-    tasks = TaskRunner({"run": run_task, "apply": apply_task, "login": login_task}, log,
-                       background)
+    # MCF and JobStreet each have their own run: neither waits for the other's search, and
+    # one site's trouble (a block, a logout) never costs the other its round.
+    tasks = TaskRunner({"run": run_task(), "run_mcf": run_task(["mcf"]),
+                        "run_jobstreet": run_task(["jobstreet"]),
+                        "apply": apply_task(), "apply_mcf": apply_task(["mcf"]),
+                        "apply_jobstreet": apply_task(["jobstreet"]),
+                        "login": login_task}, log, background)
 
     def stop_worker_then(what: str) -> None:
         """Stop the running task between jobs (so no half-finished application) before
         restarting. Logins are waited out for a minute at most."""
         if tasks.current is not None:
             notifier._send(f"Stopping {ACTIVITY.get(tasks.current, 'the current task')} first…")
-            if not tasks.wait_idle(90 if tasks.current in TaskRunner.PREEMPTIBLE else 60):
+            if not tasks.wait_idle(90 if TaskRunner.preemptible(tasks.current) else 60):
                 notifier._send(f"It didn't stop in time; {what} anyway.")
 
     def update_cmd(args: str) -> None:
@@ -631,22 +670,38 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         notifier._send("♻️ Restarting. Back in about a minute.")
         (do_restart or __import__("mcf_autoapply.updater").updater.restart)()
 
+    def site_arg(args: str) -> str | None:
+        """"" → every site; "mcf"/"jobstreet" → that site; anything else → None (bad)."""
+        a = args.strip().lower()
+        return {"": "", "mcf": "_mcf", "mycareersfuture": "_mcf", "js": "_jobstreet",
+                "jobstreet": "_jobstreet"}.get(a)
+
     def run_cmd(args: str) -> str:
-        return {"started": "Starting a run now (search, then apply). Results arrive here "
-                           "when it's done. /apply skips the search.",
+        suffix = site_arg(args)
+        if suffix is None:
+            return "Use /run, /run mcf or /run jobstreet."
+        if suffix == "_jobstreet" and not cfg.jobstreet.enabled:
+            return "JobStreet is off: /jobstreet on first."
+        where = {"": "", "_mcf": " on MCF", "_jobstreet": " on JobStreet"}[suffix]
+        return {"started": f"Starting a run{where} now (search, then apply). Results arrive "
+                           "here when it's done. /apply skips the search.",
                 "preempting": f"Stopping {ACTIVITY.get(tasks.current, 'the current task')} "
-                              "to start a run now; the rest of that round follows after.",
-                "queued": f"A run will start as soon as {ACTIVITY.get(tasks.current, 'the current task')} finishes.",
-                "already": "A run is already in progress or queued."}[
-                    tasks.submit("run", preempt=True)]
+                              f"to start a run{where} now; the rest of that round follows after.",
+                "queued": f"A run{where} will start as soon as {ACTIVITY.get(tasks.current, 'the current task')} finishes.",
+                "already": f"A run{where} is already in progress or queued."}[
+                    tasks.submit("run" + suffix, preempt=True)]
 
     def apply_cmd(args: str) -> str:
-        return {"started": "Applying to the queue now, no search first.",
+        suffix = site_arg(args)
+        if suffix is None:
+            return "Use /apply, /apply mcf or /apply jobstreet."
+        where = {"": "", "_mcf": " on MCF", "_jobstreet": " on JobStreet"}[suffix]
+        return {"started": f"Applying to the queue{where} now, no search first.",
                 "preempting": f"Stopping {ACTIVITY.get(tasks.current, 'the current task')} "
-                              "to apply now; the rest of that round follows after.",
-                "queued": f"Applying will start as soon as {ACTIVITY.get(tasks.current, 'the current task')} finishes.",
-                "already": "Applying is already in progress or queued."}[
-                    tasks.submit("apply", preempt=True)]
+                              f"to apply{where} now; the rest of that round follows after.",
+                "queued": f"Applying{where} will start as soon as {ACTIVITY.get(tasks.current, 'the current task')} finishes.",
+                "already": f"Applying{where} is already in progress or queued."}[
+                    tasks.submit("apply" + suffix, preempt=True)]
 
     def login_cmd(args: str) -> str | None:
         site = args.strip().lower() or "mcf"
@@ -678,13 +733,18 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
     notifier._send("🟢 <b>mcf-apply is running.</b> Searching for jobs now; "
                    f"then every {cfg.serve.interval_minutes} min. /help for commands.")
     next_run = clock()   # run straight away on start
+    next_js = clock() + js_interval / 2   # JobStreet's own schedule, offset from MCF's
     loops = 0
     while max_loops is None or loops < max_loops:
         loops += 1
         if clock() >= next_run:
             next_run = clock() + interval
-            tasks.submit("run")
-        elif not tasks.busy and (retry := db.get_state(RETRY_HOUR_KEY)):
+            # With JobStreet on, MCF and JobStreet run on separate schedules.
+            tasks.submit("run_mcf" if cfg.jobstreet.enabled else "run")
+        if cfg.jobstreet.enabled and clock() >= next_js:
+            next_js = clock() + js_interval
+            tasks.submit("run_jobstreet")
+        if not tasks.busy and (retry := db.get_state(RETRY_HOUR_KEY)):
             if datetime.now(timezone.utc) >= datetime.fromisoformat(retry):
                 db.set_state(RETRY_HOUR_KEY, None)
                 db.commit()

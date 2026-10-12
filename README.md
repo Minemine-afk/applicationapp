@@ -122,7 +122,8 @@ a login in progress is waited out, since it's waiting on you.
 | `/jobs [n]` | Best jobs not applied to yet, with **Apply / Skip** |
 | `/questions` | Unanswered screening questions: **Yes / No** or one button per option; reply to the card for free-text ones. Answers are saved to `answers.yml` |
 | `/run` | Search and apply now |
-| `/apply` | Apply to the queue now, without searching first |
+| `/run [mcf\|jobstreet]` | Search and apply now, on every site or just one |
+| `/apply [mcf\|jobstreet]` | Apply to the queue now, without searching first |
 | `/limits [h d]` | Show or set the per-hour and per-day caps (max 20/150); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
 | `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in |
 | `/jobstreet on\|off` | Turn the JobStreet source on or off (off by default; see below) |
@@ -183,7 +184,10 @@ To turn it on, send **/jobstreet on** to the bot (or set `jobstreet.enabled: tru
 - Employer questions are only visible inside the form. A job whose questions aren't all in
   `answers.yml` is parked as `needs_input` and the questions arrive in Telegram with option
   buttons (or a reply prompt for free-text ones). Answer, and it's queued again.
-- JobStreet has its own caps on top of the overall ones: 2/hour and 8/day by default
+- JobStreet runs independently of MCF: its own schedule (`jobstreet.interval_minutes`, offset
+  from MCF's), its own caps that neither count against nor wait on MCF's, and its own round, so
+  a block or logout on one site never costs the other its hour.
+- JobStreet's caps are 2/hour and 8/day by default
   (`/limits jobstreet h d`, max 5/20). JobStreet jobs are never auto-approved unless
   `jobstreet.allow_auto: true` (or `/jobstreet auto on`); then Auto mode uses the lower
   `jobstreet.auto_min_score` bar for them, since JobStreet listings carry no skills field and

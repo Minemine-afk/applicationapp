@@ -34,6 +34,7 @@ def ctx(tmp_path, tg):
         "apply": {"mode": "manual", "answers_path": str(tmp_path / "answers.yml")},
     })
     cfg.filters.title_include_keywords = []
+    cfg.project_dir = tmp_path   # no config.yml here: start-up patches stay out of the tests
     db = Database(":memory:")
     notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
     yield cfg, db, notifier

@@ -113,6 +113,8 @@ class JobStreet(_Strict):
     # JobStreet listings carry no skills list or years-of-experience field, so they score lower
     # than MCF ones; auto mode uses this lower bar for them (when allow_auto is on).
     auto_min_score: int = Field(20, ge=0, le=100)
+    # JobStreet searches and applies on its own schedule, independent of MCF's runs.
+    interval_minutes: int = Field(60, ge=15)
     resume_name: str = ""             # part of the saved-resume name on JobStreet; "" = first
     # JobStreet's bot check passes far more often in a visible browser than a hidden one, so
     # runs that include JobStreet jobs open a window on the PC unless this is true.

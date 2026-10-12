@@ -277,12 +277,17 @@ class Database:
         rows = self.conn.execute("SELECT state, COUNT(*) n FROM applications GROUP BY state")
         return {row["state"]: row["n"] for row in rows}
 
-    def count_events(self, type_: str, since: datetime, source: str | None = None) -> int:
+    def count_events(self, type_: str, since: datetime, source: str | None = None,
+                     exclude: Iterable[str] = ()) -> int:
+        """Events of a type since a time; for one source, or for all but `exclude`."""
         sql = "SELECT COUNT(*) FROM events WHERE type = ? AND ts >= ?"
         args: list[Any] = [type_, since.astimezone(timezone.utc).isoformat(timespec="seconds")]
         if source:
             sql += " AND json_extract(payload, '$.source') = ?"
             args.append(source)
+        for name in exclude:
+            sql += " AND COALESCE(json_extract(payload, '$.source'), 'mcf') != ?"
+            args.append(name)
         return self.conn.execute(sql, args).fetchone()[0]
 
     def first_event_ts(self, type_: str) -> datetime | None:

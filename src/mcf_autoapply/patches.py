@@ -125,6 +125,8 @@ PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
 def apply_patches(cfg: Config, db: Database) -> list[str]:
     """Run every patch that hasn't run on this machine yet. Returns the lines to report."""
     report = []
+    if not (Path(cfg.project_dir) / "config.yml").exists():
+        return report   # not an installed copy (tests, a bare checkout): nothing to patch
     for name, patch in PATCHES:
         if db.get_state(STATE_PREFIX + name):
             continue
