@@ -33,7 +33,7 @@ COMMAND_HELP = {
     "status": "Mode, today's count and the queue",
     "jobs": "Best jobs not applied to yet, with Apply / Skip",
     "questions": "Screening questions waiting for your answer",
-    "queue": "What's queued, applied or failed",
+    "queue": "What's still to be submitted, and what was applied to today",
     "mode": "Switch dry run / manual / auto",
     "limits": "Show or set how many to apply per hour and per day",
     "jobstreet": "Turn JobStreet on or off (/jobstreet on)",
@@ -506,22 +506,32 @@ class Notifier:
         pacer.unpause()
         return f"▶️ Resumed. Daily cap is {pacer.daily_cap()}."
 
-    def queue_text(self) -> str:
-        groups = [(Q.APPROVED, "📥 Queued"), (Q.NEEDS_INPUT, "❓ Waiting on your answers"),
-                  (Q.DRY_RUN_OK, "🧪 Dry run passed"), (Q.FAILED, "❌ Failed"),
-                  (Q.APPLIED, "✅ Applied (latest)")]
+    def queue_text(self, max_lines: int = 15) -> str:
+        """What's still to be submitted, and what was submitted today."""
+        tz = ZoneInfo(self.cfg.apply.timezone)
+        midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        today = [r for r in self.db.applications([Q.APPLIED])
+                 if r["submitted_at"] and datetime.fromisoformat(r["submitted_at"]) >= midnight]
+        queued = self.db.applications([Q.APPROVED])
         lines = []
-        if n := self.db.applied_on_site_count():
-            lines.append(f"📋 The sites list <b>{n}</b> applications of yours; those jobs are skipped.")
-        for state, label in groups:
-            rows = self.db.applications([state], limit=5)
-            if not rows:
-                continue
-            lines.append(f"<b>{label}</b>")
-            for r in rows:
-                note = f" — {escape(r['error'])}" if state == Q.FAILED and r["error"] else ""
-                lines.append(f"• {escape(r['title'])} ({escape(r['company_name'])}){note}")
-        return "\n".join(lines) or "Queue is empty. Tap Apply on a /jobs card to queue one."
+
+        def listing(label: str, rows: list) -> None:
+            lines.append(f"<b>{label} ({len(rows)})</b>")
+            for r in rows[:max_lines]:
+                lines.append(f"• {escape(r['title'])} ({escape(r['company_name'])}) · "
+                             f"{LABELS.get(r['source'] if 'source' in r.keys() else 'mcf', '')}")
+            if len(rows) > max_lines:
+                lines.append(f"… and {len(rows) - max_lines} more")
+
+        if queued:
+            listing("📥 To be submitted", queued)
+        if n := len(self.db.applications([Q.NEEDS_INPUT])):
+            lines.append(f"❓ {n} waiting on your answers (/questions)")
+        if today:
+            if lines:
+                lines.append("")
+            listing("✅ Applied today", today)
+        return "\n".join(lines) or "Nothing queued and nothing applied today. Tap Apply on a /jobs card to queue one."
 
     def _on_callback(self, cb: dict) -> str:
         message = cb.get("message") or {}

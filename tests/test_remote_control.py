@@ -75,26 +75,51 @@ def test_queued_jobstreet_jobs_wait_while_jobstreet_is_off(ctx):
     assert [r["job_uuid"] for r in A.pending(db, dry_run=False, jobstreet=True)] == ["js:5"]
 
 
-def test_update_command_pulls_and_restarts_only_when_changed(ctx, tg):
+def test_queue_shows_only_whats_pending_and_todays_submissions(ctx, tg):
+    from datetime import datetime, timedelta, timezone
+
+    cfg, db, notifier = ctx
+    for i, title in enumerate(["Queued Dev", "Done Today", "Done Last Week", "Failed One",
+                               "Needs Answers"]):
+        db.upsert_job(Job.from_jobstreet({"id": str(i), "title": title, "companyName": "Acme",
+                                          "listingDate": "2026-10-10T00:00:00Z"}), "x")
+    apply_filters(db, cfg)
+    Q.approve(db, None, AnswerBank(cfg.apply.answers_path), [f"js:{i}" for i in range(5)])
+    now = datetime.now(timezone.utc)
+    db.update_application("js:1", state=Q.APPLIED, submitted_at=now.isoformat(timespec="seconds"))
+    db.update_application("js:2", state=Q.APPLIED,
+                          submitted_at=(now - timedelta(days=8)).isoformat(timespec="seconds"))
+    db.update_application("js:3", state=Q.FAILED, error="boom")
+    db.update_application("js:4", state=Q.NEEDS_INPUT)
+    db.commit()
+    text = notifier.queue_text()
+    assert "📥 To be submitted (1)" in text and "Queued Dev" in text
+    assert "✅ Applied today (1)" in text and "Done Today" in text
+    assert "1 waiting on your answers" in text
+    assert "Done Last Week" not in text and "Failed One" not in text and "Needs Answers" not in text
+
+
+def test_update_command_pulls_then_restarts_unless_the_pull_failed(ctx, tg):
     cfg, db, notifier = ctx
     restarted = []
     tg.pending_updates += [msg(1, "/update")]
     serve(cfg, db, notifier, lambda m: None, run=lambda: None, max_loops=1, background=False,
-          do_update=lambda: ("✅ Already on the latest version.", False),
+          do_update=lambda: ("❌ git pull failed:\nno internet", False),
           do_restart=lambda: restarted.append(1))
     texts = [b["text"] for b in tg.sent()]
     assert any("Checking for an update" in t for t in texts)
-    assert "✅ Already on the latest version." in texts
+    assert any(t.startswith("❌ git pull failed") for t in texts)
+    assert any(t.startswith("Not restarting") for t in texts)
     assert restarted == []
 
-    tg.pending_updates += [msg(2, "/update")]
-    serve(cfg, db, notifier, lambda m: None, run=lambda: None, max_loops=1, background=False,
-          do_update=lambda: ("⬇️ Updated:\n 3 files changed", True),
-          do_restart=lambda: restarted.append(1))
-    texts = [b["text"] for b in tg.sent()]
-    assert any(t.startswith("⬇️ Updated") for t in texts)
-    assert any(t.startswith("♻️ Restarting to load the update") for t in texts)
-    assert restarted == [1]
+    for i, reply in enumerate(("✅ Already on the latest version.", "⬇️ Updated:\n 3 files changed"), 2):
+        tg.pending_updates += [msg(i, "/update")]
+        serve(cfg, db, notifier, lambda m: None, run=lambda: None, max_loops=1, background=False,
+              do_update=lambda: (reply, True), do_restart=lambda: restarted.append(1))
+        texts = [b["text"] for b in tg.sent()]
+        assert reply in texts
+        assert any(t.startswith("♻️ Restarting") for t in texts)
+    assert restarted == [1, 1]
 
 
 def test_run_update_reports_a_real_git_checkout(tmp_path):

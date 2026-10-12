@@ -267,7 +267,7 @@ def test_pause_resume_queue_jobs_and_unknown_text(setup, tg):
     assert texts[0].startswith("⏸")
     cards = [t for t in texts if "Score" in t]
     assert len(cards) == 2                         # /jobs 2: the best two, any score band
-    assert "Queue is empty" in texts[3]
+    assert "Nothing queued and nothing applied today" in texts[3]
     assert texts[4].startswith("▶️")
     assert texts[5].startswith("<b>Commands</b>")  # unknown text → help
 

@@ -55,7 +55,7 @@ Open your bot in Telegram. Type `/` to see the commands.
 | `/run` | Search and apply now, instead of waiting for the hourly run. |
 | `/apply` | Apply to the queue now, without searching first (faster). |
 | `/limits` | Show or set how many to apply per hour and per day, e.g. `/limits 6 30`. |
-| `/queue` | What's queued, waiting on answers, applied or failed. |
+| `/queue` | What's still to be submitted, and what was applied to today. |
 | `/status` | Mode, today's count, and whether anything is paused. |
 | `/pause`, `/resume` | Stop or restart submissions. Searching continues. |
 | `/help` | All commands. |

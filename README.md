@@ -118,12 +118,13 @@ also makes mcf-apply start when you log in. Then keep `mcf-apply serve` running 
 | `/questions` | Unanswered screening questions: **Yes / No** or one button per option; reply to the card for free-text ones. Answers are saved to `answers.yml` |
 | `/run` | Search and apply now |
 | `/apply` | Apply to the queue now, without searching first |
-| `/limits [h d]` | Show or set the per-hour and per-day caps (max 10/60); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
+| `/limits [h d]` | Show or set the per-hour and per-day caps (max 20/150); `/limits jobstreet h d` for JobStreet's own caps (max 5/20) |
 | `/login jobstreet` | Opens JobStreet's sign-in in a window on the PC for you to log in |
 | `/jobstreet on\|off` | Turn the JobStreet source on or off (off by default; see below) |
 | `/update` | Pull the latest version and restart (the Windows start script reinstalls and restarts it) |
+| `/queue` | What's still to be submitted, and what was applied to today |
 | `/restart` | Restart mcf-apply |
-| `/queue`, `/status` | Queue, today's count, pause state |
+| `/status` | Mode, today's count, pause state |
 | `/pause`, `/resume` | Stop or restart submissions |
 
 Sent without asking: job cards after each search, new screening questions, run summaries
@@ -138,7 +139,7 @@ submissions pause. Only the linked chat is obeyed. `/login` and `/run` need `mcf
 - **Answers:** screening answers only come from `answers.yml`. A job with an unanswered question
   waits in `needs_input` and is never guessed.
 - **Pacing:** submissions happen only within `active_hours`, at most `hourly_cap` per hour, with
-  a random 45–120 s gap. The daily cap starts at 15 and rises weekly to 40 (`ramp`).
+  a random 45–120 s gap. The daily cap starts at 50 and rises weekly to 100 (`ramp`).
 - **Automatic pause:** a CAPTCHA or repeated failures pause all submissions until you run
   `mcf-apply unpause`. The daily cap then restarts at the bottom of the ramp.
 - **No double applying:** before each applying run, your **Applied Jobs** list is read from MCF

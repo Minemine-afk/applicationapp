@@ -249,10 +249,10 @@ apply:
   mode: dry_run                       # dry_run | manual | auto_threshold
   auto_apply_min_score: 75
   quick_review_min_score: 60          # 60–75 go to Telegram for a one-tap decision
-  daily_cap: 40                       # final cap once the ramp completes
-  hourly_cap: 4
+  daily_cap: 100                      # final cap once the ramp completes
+  hourly_cap: 12
   active_hours: ["08:00", "22:00"]    # Asia/Singapore
-  ramp: [15, 25, 40]                  # step up one level after each clean week
+  ramp: [50, 75, 100]                 # step up one level after each clean week
   delay_seconds: [45, 120]            # random wait between submissions
 llm:
   model: claude-sonnet-5-5

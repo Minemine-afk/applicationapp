@@ -380,14 +380,16 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         from mcf_autoapply import updater
 
         with worker_notifier() as (wdb, wn):
-            summary, changed = (do_update or (lambda: updater.run_update(cfg.project_dir)))()
+            summary, pulled = (do_update or (lambda: updater.run_update(cfg.project_dir)))()
             log(summary)
             wn._send(summary)
-            if changed:
-                wn._send("♻️ Restarting to load the update: the start script reinstalls it "
-                         "first. Back in a minute or two (\"🟢 mcf-apply is running\" means "
-                         "it worked).")
-        if changed:
+            if pulled:
+                wn._send("♻️ Restarting: the start script reinstalls the app, then starts it. "
+                         "Back in a minute or two (\"🟢 mcf-apply is running\" means it worked).")
+            else:
+                wn._send("Not restarting, since nothing was pulled. Fix the problem above (or "
+                         "send /restart to restart anyway).")
+        if pulled:
             (do_restart or updater.restart)()
 
     def restart_task() -> None:

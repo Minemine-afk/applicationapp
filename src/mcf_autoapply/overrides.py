@@ -12,7 +12,7 @@ DAILY_KEY = "override:apply.daily_cap"
 JS_ENABLED_KEY = "override:jobstreet.enabled"
 JS_HOURLY_KEY = "override:jobstreet.hourly_cap"
 JS_DAILY_KEY = "override:jobstreet.daily_cap"
-MAX_HOURLY, MAX_DAILY = 10, 60
+MAX_HOURLY, MAX_DAILY = 20, 150
 MAX_JS_HOURLY, MAX_JS_DAILY = 5, 20     # JobStreet forbids automation; keep it quiet
 
 
