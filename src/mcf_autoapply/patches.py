@@ -14,7 +14,7 @@ from pathlib import Path
 from mcf_autoapply.config import Config
 from mcf_autoapply.db import Database
 from mcf_autoapply.overrides import set_jobstreet_enabled, set_limits
-from mcf_autoapply.setup import set_section_value
+from mcf_autoapply.setup import replace_section, section_block, set_section_value
 
 STATE_PREFIX = "patch:"
 
@@ -50,8 +50,52 @@ def requested_settings_2026_10_12(cfg: Config, db: Database) -> list[str]:
                    "limits: 12/hour, 100/day (as /limits 12 100 would)"]
 
 
+def copy_sections_from_example(cfg: Config, sections: list[str]) -> list[str]:
+    """Replace whole sections of config.yml with the current config.example.yml's versions."""
+    project = Path(cfg.project_dir)
+    path, example = project / "config.yml", project / "config.example.yml"
+    if not path.exists() or not example.exists():
+        return []
+    text, ex = path.read_text(encoding="utf-8"), example.read_text(encoding="utf-8")
+    done = []
+    for section in sections:
+        block = section_block(ex, section)
+        if block is None:
+            continue
+        text, changed = replace_section(text, section, block)
+        if changed:
+            done.append(f"{section}: replaced with the new version")
+    if done:
+        path.with_suffix(".yml.bak").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        path.write_text(text, encoding="utf-8")
+    return done
+
+
+def broader_search_2026_10_12b(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat: many more search terms (software developer, devops, data, cloud,
+    backend, AI engineer in every family), looser title/experience filters, lower auto
+    threshold. Re-filters and re-scores the jobs already stored so they can be queued now."""
+    from mcf_autoapply.config import load_config
+    from mcf_autoapply.pipeline.discover import apply_filters
+
+    done = copy_sections_from_example(cfg, ["searches", "filters", "ranking"])
+    done += edit_config(cfg, [("apply", "auto_apply_min_score", "35"),
+                              ("telegram", "quick_review_min_score", "20")])
+    path = Path(cfg.project_dir) / "config.yml"
+    if path.exists():
+        fresh = load_config(path)                      # validated; raises if the merge went wrong
+        cfg.searches, cfg.filters, cfg.ranking = fresh.searches, fresh.filters, fresh.ranking
+    cfg.apply.auto_apply_min_score = 35
+    cfg.telegram.quick_review_min_score = 20
+    counts = apply_filters(db, cfg)
+    done.append(f"{sum(len(s.terms()) for s in cfg.searches)} search terms; stored jobs re-filtered "
+                f"({', '.join(f'{n} {k}' for k, n in counts.items())})")
+    return done
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
+    ("2026-10-12b-broader-search", broader_search_2026_10_12b),
 ]
 
 

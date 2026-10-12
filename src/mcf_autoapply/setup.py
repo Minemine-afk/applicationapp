@@ -43,6 +43,20 @@ def set_section_value(text: str, section: str, key: str, value: str) -> tuple[st
     return text, False
 
 
+def section_block(text: str, section: str) -> str | None:
+    """The text of a top-level YAML section (its header line through to the next one)."""
+    m = re.search(rf"(?ms)^{re.escape(section)}:[^\n]*\n(?:(?:[ \t]+[^\n]*|)\n)*", text)
+    return m.group(0) if m else None
+
+
+def replace_section(text: str, section: str, new_block: str) -> tuple[str, bool]:
+    """Swap a whole top-level section for `new_block` (which must start with its header)."""
+    old = section_block(text, section)
+    if old is None or old == new_block:
+        return text, False
+    return text.replace(old, new_block, 1), True
+
+
 def enable_telegram(config_path: Path) -> bool:
     text = config_path.read_text(encoding="utf-8")
     new, changed = set_section_value(text, "telegram", "enabled", "true")

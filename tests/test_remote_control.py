@@ -174,7 +174,7 @@ def test_config_command_edits_config_yml(ctx, tg, tmp_path):
     cfg, db, notifier = ctx
     cfg.project_dir = tmp_path
     shutil.copy(Path(__file__).parents[1] / "config.example.yml", tmp_path / "config.yml")
-    assert "already" in notifier._cmd_config("apply.auto_apply_min_score 55")
+    assert "already" in notifier._cmd_config("apply.auto_apply_min_score 35")
     assert notifier._cmd_config("apply.auto_apply_min_score 60").startswith("✏️")
     assert "auto_apply_min_score: 60\n" in (tmp_path / "config.yml").read_text()
     assert "isn't valid" in notifier._cmd_config("apply.auto_apply_min_score banana")
@@ -194,10 +194,33 @@ def test_requested_settings_patch_runs_once(ctx, tmp_path):
     (tmp_path / "config.yml").write_text(text.replace("auto_apply_min_score: 55", "auto_apply_min_score: 70")
                                          .replace("delay_seconds: [45, 100]", "delay_seconds: [45, 120]"))
     report = apply_patches(cfg, db)
-    assert len(report) == 1 and "apply.auto_apply_min_score: 55" in report[0]
+    assert len(report) == 2 and "apply.auto_apply_min_score: 55" in report[0]
     new = (tmp_path / "config.yml").read_text()
-    assert "auto_apply_min_score: 55\n" in new and "delay_seconds: [45, 100] " in new
+    assert "auto_apply_min_score: 35\n" in new and "delay_seconds: [45, 100] " in new   # 2nd patch: 35
     assert "  enabled: true\n" in new.split("jobstreet:")[1]
-    assert cfg.apply.auto_apply_min_score == 55 and cfg.apply.delay_seconds == (45, 100)
+    assert cfg.apply.auto_apply_min_score == 35 and cfg.apply.delay_seconds == (45, 100)
     assert cfg.jobstreet.enabled and (cfg.apply.hourly_cap, cfg.apply.daily_cap) == (12, 100)
     assert apply_patches(cfg, db) == []            # never twice
+
+
+def test_broader_search_patch_rewrites_sections_and_refilters(ctx, tmp_path, job_factory):
+    from mcf_autoapply.patches import apply_patches
+    from mcf_autoapply.setup import section_block
+
+    cfg, db, _ = ctx
+    cfg.project_dir = tmp_path
+    example = Path(__file__).parents[1] / "config.example.yml"
+    old = example.read_text().replace("max_years_experience_required: 3", "max_years_experience_required: 2")
+    old = old[:old.index("searches:")] + 'searches:\n  - query: "old"\n\n' + old[old.index("filters:"):]
+    (tmp_path / "config.yml").write_text(old)
+    (tmp_path / "config.example.yml").write_text(example.read_text())
+    db.upsert_job(Job.from_api(job_factory(title="Cloud Engineer", minimumYearsExperience=3)), "x")
+
+    report = apply_patches(cfg, db)
+    assert any("broader-search" in r for r in report)
+    new = (tmp_path / "config.yml").read_text()
+    assert section_block(new, "searches") == section_block(example.read_text(), "searches")
+    assert "max_years_experience_required: 3" in new and "auto_apply_min_score: 35" in new
+    assert "- query: \"old\"" not in new
+    assert len(cfg.searches) == 7 and cfg.filters.max_years_experience_required == 3
+    assert db.jobs(["new"])[0]["title"] == "Cloud Engineer"   # 3 years now passes the filter

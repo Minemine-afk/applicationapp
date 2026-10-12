@@ -41,22 +41,42 @@ profile:
 # Searches run on every enabled site (MCF; JobStreet too once it's on, via /jobstreet on
 # or jobstreet.enabled below). Add `sources: [mcf]` to a search to keep it to one site.
 searches:
+  # Every term is searched on its own; `also` just groups them. The six core roles
+  # (software developer, backend engineer, AI engineer, devops engineer, data engineer,
+  # cloud engineer) are covered under every family so nothing slips between them.
   - query: "software engineer"
-    also: ["software developer", "backend engineer", "full stack engineer", "platform engineer"]
+    also: ["software developer", "backend engineer", "full stack engineer", "frontend engineer",
+           "web developer", "application developer", "java developer", "python developer",
+           ".net developer", "mobile developer", "platform engineer", "junior software engineer",
+           "graduate software engineer", "software engineer fresh graduate"]
   - query: "AI engineer"
-    also: ["machine learning engineer", "ML engineer", "LLM engineer", "MLOps engineer"]
+    also: ["machine learning engineer", "ML engineer", "LLM engineer", "MLOps engineer",
+           "GenAI engineer", "AI developer", "NLP engineer", "computer vision engineer",
+           "AI software engineer", "junior AI engineer"]
   - query: "devops engineer"
-    also: ["site reliability engineer", "cloud engineer", "infrastructure engineer"]
-  - query: "data analyst"
-    also: ["data engineer", "data scientist", "business intelligence", "analytics"]
+    also: ["site reliability engineer", "cloud engineer", "infrastructure engineer",
+           "platform engineer", "cloud devops engineer", "systems engineer", "junior devops engineer",
+           "cloud infrastructure engineer"]
+  - query: "data engineer"
+    also: ["data analyst", "data scientist", "analytics engineer", "business intelligence",
+           "big data engineer", "ETL developer", "junior data engineer", "junior data analyst",
+           "graduate data analyst", "data engineer fresh graduate"]
+  - query: "cloud engineer"
+    also: ["AWS engineer", "Azure engineer", "cloud support engineer", "cloud solutions engineer",
+           "cloud operations engineer", "junior cloud engineer"]
+  - query: "backend engineer"
+    also: ["backend developer", "API developer", "microservices developer", "server side developer",
+           "junior backend developer"]
   - query: "fresh graduate software"
-    also: ["graduate software engineer", "junior software engineer", "associate software engineer",
-           "junior developer", "graduate data analyst", "junior data engineer"]
+    also: ["graduate engineer", "junior engineer", "associate engineer", "associate software engineer",
+           "entry level software engineer", "graduate programme technology",
+           "management associate technology", "junior developer", "trainee software engineer",
+           "it graduate"]
 
 filters:
   max_age_days: 14                    # ignore postings older than this
   salary_min_monthly: 3500            # drop jobs whose top of range is below this (SGD)
-  max_years_experience_required: 2    # drop jobs asking for more than this
+  max_years_experience_required: 3    # drop jobs asking for more than this
   employment_types: [Full Time, Permanent, Contract]   # empty list = any
   position_levels: []                 # e.g. [Executive, Senior Executive, Professional]
   # The title must contain at least one of these (whole words, case-insensitive).
@@ -107,10 +127,47 @@ filters:
     - bi
     - business intelligence
     - etl
+    # broader technology titles
+    - engineer
+    - developer
+    - analyst
+    - programmer
+    - application
+    - applications
+    - system
+    - systems
+    - software
+    - technology
+    - technical
+    - it
+    - information technology
+    - automation
+    - qa
+    - test
+    - quality assurance
+    - integration
+    - solutions
+    - implementation
+    - api
+    - web
+    - mobile
+    - ios
+    - android
+    - python
+    - java
+    - .net
+    - golang
+    - robotics
+    - embedded
+    - firmware
+    - research engineer
+    - product engineer
+    - management associate
+    - graduate
+    - trainee programme
   title_exclude_keywords:
     - intern
     - internship
-    - trainee
     - sales
     - presales
     - pre-sales
@@ -130,6 +187,28 @@ filters:
     - technician
     - instrumentation
     - admissions
+    - mechanical engineer
+    - process engineer
+    - quality engineer
+    - manufacturing
+    - marine
+    - hvac
+    - financial analyst
+    - credit analyst
+    - investment analyst
+    - research analyst
+    - marketing
+    - account
+    - accounts
+    - accountant
+    - audit
+    - hr
+    - recruit
+    - procurement
+    - logistics
+    - nurse
+    - teacher
+    - chef
   # Titles with these words are dropped as too senior, unless the title also has an
   # entry-level keyword (e.g. "Junior/Senior DevOps Engineer" is kept).
   seniority_keywords:
@@ -165,15 +244,15 @@ ranking:
     - early career
     - graduate programme
     - graduate program
-  entry_level_weight: 0.6             # share of the score for entry-level fit; the rest is skills
-  skills_for_full_marks: 6            # this many of your skills mentioned = full skills score
+  entry_level_weight: 0.4             # share of the score for entry-level fit; the rest is skills
+  skills_for_full_marks: 5            # this many of your skills mentioned = full skills score
 
 apply:
   # dry_run: fill every form up to the review page and screenshot it, never submit.
   # manual:  submit only the jobs you approve (`mcf-apply approve <ID>`).
   # auto:    also approve jobs scoring auto_apply_min_score or more by itself.
   mode: dry_run
-  auto_apply_min_score: 55
+  auto_apply_min_score: 35
   auto_apply_fresh_grad_only: false
   resume_name: ""                     # part of the file name of the MCF resume to attach; "" = MCF's default
   answers_path: ./answers.yml         # your yes/no screening answers (`mcf-apply questions`)
@@ -194,7 +273,7 @@ telegram:
   # `mcf-apply setup` saves the bot token in the TELEGRAM_BOT_TOKEN environment variable
   # (never in this file) and links your chat when you press Start on the bot.
   enabled: true
-  quick_review_min_score: 60          # jobs from here up to auto_apply_min_score come to your phone
+  quick_review_min_score: 20          # jobs from here up to auto_apply_min_score come to your phone
   max_cards_per_run: 8
   alert_every_hours: 6                # same alert (e.g. login expired) at most this often
 

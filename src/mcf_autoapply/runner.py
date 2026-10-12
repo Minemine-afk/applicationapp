@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timezone
 import traceback
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -160,6 +161,29 @@ def found_nothing_because_interrupted(reason: str) -> bool:
     return reason.startswith("interrupted")
 
 
+RETRY_HOUR_KEY = "retry_at_next_hour"
+
+
+def hour_cap_retry_at(cfg: Config, db: Database) -> str | None:
+    """When to apply again (ISO, UTC) if only the hourly cap holds queued jobs back; else None."""
+    from datetime import timedelta
+
+    from mcf_autoapply.pipeline import apply as A
+    from mcf_autoapply.pipeline.pacer import Pacer
+
+    if cfg.apply.mode == "dry_run":
+        return None
+    if not A.pending(db, False, jobstreet=cfg.jobstreet.enabled):
+        return None
+    pacer = Pacer(cfg.apply, db, site_caps=A.site_caps(cfg))
+    reason = pacer.blocked_reason()
+    if not reason or not reason.startswith("hourly cap"):
+        return None
+    now = pacer.now()
+    top = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1, minutes=1))
+    return top.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 def record_run(cfg: Config, db: Database, notifier: Notifier, result, kind: str = "run",
                new_passed: int = 0, auto_approved: int = 0) -> str | None:
     """Remember what the last run did (for /status) and say why nothing was applied, once."""
@@ -176,6 +200,9 @@ def record_run(cfg: Config, db: Database, notifier: Notifier, result, kind: str 
         "failed": sum(o.state == Q.FAILED for _, o in outcomes),
         "idle_reason": reason,
     }))
+    # Jobs left over because of the hourly cap get another go at the top of the next hour
+    # instead of waiting for the next scheduled run (see serve).
+    db.set_state(RETRY_HOUR_KEY, hour_cap_retry_at(cfg, db))
     db.commit()
     if reason and not (result and result.stopped) and not found_nothing_because_interrupted(reason):
         key = f"idle:{cfg.apply.mode}:" + reason.split(":")[0].split(" (")[0]
@@ -657,6 +684,12 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
         if clock() >= next_run:
             next_run = clock() + interval
             tasks.submit("run")
+        elif not tasks.busy and (retry := db.get_state(RETRY_HOUR_KEY)):
+            if datetime.now(timezone.utc) >= datetime.fromisoformat(retry):
+                db.set_state(RETRY_HOUR_KEY, None)
+                db.commit()
+                log("New hour: applying to the jobs the hourly cap held back.")
+                tasks.submit("apply")
         notifier.activity = ACTIVITY.get(tasks.active) if tasks.active else None
         notifier.progress = tasks.progress.text
         wait = max(1, min(50, next_run - clock()))

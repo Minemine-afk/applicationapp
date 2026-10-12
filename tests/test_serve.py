@@ -263,3 +263,50 @@ def test_run_reports_progress_per_job(tmp_path, job_factory):
           on_progress=seen.append)
     assert seen[0].startswith("applying to job 1/2:") and "so far ✅ 0 ❌ 0" in seen[0]
     assert seen[1].startswith("waiting ") and "before job 2/2" in seen[1] and "✅ 1" in seen[1]
+
+
+def test_hourly_cap_leftovers_are_applied_at_the_top_of_the_next_hour(cfg, db, tg):
+    """A round capped at N/hour left the rest for the next scheduled run (up to an hour
+    later); now serve applies them at the next clock hour."""
+    from datetime import datetime, timedelta, timezone
+
+    from mcf_autoapply.runner import RETRY_HOUR_KEY
+
+    applied = []
+    import mcf_autoapply.runner as R
+    original = R.apply_only
+    R.apply_only = lambda *a, **k: applied.append(1)
+    notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    try:
+        db.set_state(RETRY_HOUR_KEY, (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+        db.commit()
+        clock = FakeClock()
+        serve(cfg, db, notifier, lambda m: None, clock=clock, sleep=clock.sleep, run=lambda: None,
+              max_loops=2, background=False)
+        assert applied == []                                   # not yet that hour
+        db.set_state(RETRY_HOUR_KEY, (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat())
+        db.commit()
+        serve(cfg, db, notifier, lambda m: None, clock=clock, sleep=clock.sleep, run=lambda: None,
+              max_loops=2, background=False)
+        assert applied == [1] and db.get_state(RETRY_HOUR_KEY) is None
+    finally:
+        R.apply_only = original
+
+
+def test_retry_time_is_set_only_when_the_hourly_cap_is_the_blocker(tmp_path, job_factory):
+    from datetime import time as dtime
+
+    from test_apply_flow import add_jobs, approve_all, make_cfg
+    from mcf_autoapply.pipeline.pacer import APPLIED_EVENT
+    from mcf_autoapply.runner import hour_cap_retry_at
+
+    cfg = make_cfg(tmp_path, mode="manual", hourly_cap=1)
+    cfg.apply.active_hours = (dtime(0, 0), dtime(23, 59, 59))
+    db = Database(":memory:")
+    assert hour_cap_retry_at(cfg, db) is None                 # nothing queued
+    approve_all(db, cfg, add_jobs(db, cfg, job_factory, 2))
+    assert hour_cap_retry_at(cfg, db) is None                 # cap not reached
+    db.log(None, APPLIED_EVENT, {"source": "mcf"})
+    db.commit()
+    retry = hour_cap_retry_at(cfg, db)
+    assert retry and retry.endswith(":01:00+00:00")           # a minute past the next hour
