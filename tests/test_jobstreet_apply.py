@@ -60,6 +60,8 @@ def site(browser, tmp_path):
         return route.fulfill(body=FAKE, content_type="text/html")
 
     page.route("https://fake-jobstreet.test/**", handle)
+    page.route("https://careers.acme.example/**", lambda r: r.fulfill(
+        content_type="text/html", body="<h1>Acme careers</h1><p>Upload your resume</p>"))
 
     def applier(dry_run=False, resume_name="", cloudflare_wait_s=2):
         return JobStreetApplier(page, tmp_path / "shots", resume_name, dry_run,
@@ -83,8 +85,8 @@ def test_unanswered_employer_questions_come_back_as_needs_input(site):
     page, make, submitted = site
     out = make().apply("js:2", f"{BASE}/ok?q=2", [Q1], ["yes"])    # Q2 unknown
     assert out.state == Q.NEEDS_INPUT, out.detail
-    assert [q["question"] for q in out.questions] == [Q1, Q2]
-    assert out.questions[1]["options"] == ["None", "Less than 1 year", "1-2 years", "3+ years"]
+    assert [q["question"] for q in out.questions] == [Q2]           # only what's missing
+    assert out.questions[0]["options"] == ["None", "Less than 1 year", "1-2 years", "3+ years"]
     assert submitted == []
 
 
@@ -118,6 +120,34 @@ def test_documents_step_groups_are_never_asked_as_questions(site):
     out = make().apply("js:7", f"{BASE}/ok?q=1", [], [])
     assert out.state == Q.NEEDS_INPUT
     assert [q["question"] for q in out.questions] == [Q1]          # not "Resumé"/"Cover letter"
+
+
+def test_answers_jobstreet_prefilled_are_kept_and_not_asked(site):
+    """From the screenshots: right to work and qualification were already selected."""
+    page, make, submitted = site
+    out = make().apply("js:9", f"{BASE}/ok?q=2&prefill=2", [], [])
+    assert out.state == Q.APPLIED, out.detail
+    assert submitted[0]["answers"] == {Q1: "Yes", Q2: "None"}
+
+
+def test_dropdown_questions_offer_the_dropdowns_choices(site):
+    page, make, submitted = site
+    out = make().apply("js:10", f"{BASE}/ok?q=4&prefill=3", [Q3], ["4500"])
+    assert out.state == Q.NEEDS_INPUT
+    [q] = out.questions
+    assert q["question"].startswith("How many years") and \
+        q["options"] == ["None", "Less than 1 year", "1 year", "2 years"]
+    out = make().apply("js:10", f"{BASE}/ok?q=4&prefill=3", [Q3, q["question"]],
+                       ["4500", "Less than 1 year"])
+    assert out.state == Q.APPLIED, out.detail
+    assert submitted[-1]["answers"][q["question"]] == "Less than 1 year"
+
+
+def test_apply_address_that_forwards_to_the_employer_is_external_not_failed(site):
+    """From the screenshots: 'Software Engineer II' landed on Morgan Stanley's careers site."""
+    page, make, submitted = site
+    out = make().apply("js:11", f"{BASE}/linkout", [], [])
+    assert out.state == Q.EXTERNAL and "careers.acme.example" in out.detail
 
 
 def test_non_submissions_leave_a_screenshot_and_the_page(site):

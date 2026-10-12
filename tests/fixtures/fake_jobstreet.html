@@ -14,11 +14,14 @@ const QUESTIONS = [
   {q: "Do you have a degree in Computer Science or a related field?", opts: ["Yes", "No"]},
   {q: "Which of the following best describes your experience with Python?", opts: ["None", "Less than 1 year", "1-2 years", "3+ years"]},
   {q: "What is your expected monthly salary?", opts: []},
+  {q: "How many years' experience do you have as a Software Engineer?", select: ["None", "Less than 1 year", "1 year", "2 years"]},
 ];
+const PREFILL = params => Number(params.get("prefill") || 0);   // how many JobStreet pre-filled
 const params = new URLSearchParams(location.search);
 const path = location.pathname;
 const variant = path.split("/")[2];
 const nQuestions = Number(params.get("q") || 0);
+const nPrefilled = PREFILL(params);
 const app = document.getElementById("app");
 const state = {resume: "", cover: "", answers: {}};
 
@@ -69,8 +72,13 @@ function step(i) {
     app.querySelector("[data-testid=coverLetter-method-none]").onchange = () => state.cover = "none";
   } else if (name === "questions") {
     const groups = QUESTIONS.slice(0, nQuestions).map((item, k) => {
+      const pre = k < nPrefilled;   // answered on an earlier application
+      if (item.select) {
+        const opts = item.select.map(o => `<option value="${o}"${pre && o === item.select[1] ? " selected" : ""}>${o}</option>`).join("");
+        return `<fieldset data-testid="question-${k}"><legend>${item.q}</legend><select name="q${k}"><option value="">Select</option>${opts}</select></fieldset>`;
+      }
       if (item.opts.length) {
-        const opts = item.opts.map((o, j) => `<label><input class="vh" type="radio" name="q${k}" value="${o}"> ${o}</label>`).join("");
+        const opts = item.opts.map((o, j) => `<label><input class="vh" type="radio" name="q${k}" value="${o}"${pre && j === 0 ? " checked" : ""}> ${o}</label>`).join("");
         return `<fieldset data-testid="question-${k}"><legend>${item.q}</legend>${opts}</fieldset>`;
       }
       return `<fieldset data-testid="question-${k}"><legend>${item.q}</legend><input type="text" name="q${k}"></fieldset>`;
@@ -95,7 +103,8 @@ function step(i) {
     if (name === "questions") {
       for (let k = 0; k < nQuestions; k++) {
         const item = QUESTIONS[k];
-        const el = item.opts.length ? app.querySelector(`input[name=q${k}]:checked`) : app.querySelector(`input[name=q${k}]`);
+        const el = item.select ? app.querySelector(`select[name=q${k}]`)
+          : item.opts.length ? app.querySelector(`input[name=q${k}]:checked`) : app.querySelector(`input[name=q${k}]`);
         if (!el || !el.value) return err.textContent = "Please select an answer";
         state.answers[item.q] = el.value;
       }
@@ -105,7 +114,9 @@ function step(i) {
   };
 }
 
-if (path.includes("/apply")) setTimeout(() => step(0), 100); else jobPage();
+// Some jobs' JobStreet apply address forwards to the employer's own site.
+if (path.includes("/apply") && variant === "linkout") location.href = "https://careers.acme.example/apply";
+else if (path.includes("/apply")) setTimeout(() => step(0), 100); else jobPage();
 </script>
 </body>
 </html>

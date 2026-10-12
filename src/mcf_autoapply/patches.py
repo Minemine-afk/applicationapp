@@ -194,6 +194,21 @@ def midnight_and_site_pauses_2026_10_13c(cfg: Config, db: Database) -> list[str]
                    + (f"; lifted the pause ({was['reason']})" if was else "")]
 
 
+def retry_jobstreet_questions_2026_10_13d(cfg: Config, db: Database) -> list[str]:
+    """JobStreet jobs parked for questions JobStreet had already filled in (right to work,
+    qualification) go back in the queue; only questions really left blank come back to you."""
+    from mcf_autoapply.pipeline import queue as Q
+
+    n = 0
+    for app in db.applications([Q.NEEDS_INPUT, Q.FAILED]):
+        if app["job_uuid"].startswith("js:"):
+            db.update_application(app["job_uuid"], state=Q.APPROVED, attempts=0, error=None,
+                                  questions=[], answers=[])
+            n += 1
+    db.commit()
+    return [f"JobStreet: {n} job(s) waiting on questions or failed are queued again"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
@@ -203,6 +218,7 @@ PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-13-requeue-jobstreet", requeue_jobstreet_2026_10_13),
     ("2026-10-13b-tighter-titles", tighter_titles_2026_10_13b),
     ("2026-10-13c-midnight-site-pauses", midnight_and_site_pauses_2026_10_13c),
+    ("2026-10-13d-retry-jobstreet-questions", retry_jobstreet_questions_2026_10_13d),
 ]
 
 

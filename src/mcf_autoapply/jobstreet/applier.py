@@ -76,12 +76,16 @@ class JobStreetApplier:
         page.goto(form_url, wait_until="domcontentloaded")
         if not self._clear_cloudflare():
             return self._evidence(CAPTCHA, "JobStreet's bot check didn't clear", "cloudflare")
+        if left := self._left_jobstreet(form_url):
+            return left
         if self._logged_out():
             return self._evidence(LOGGED_OUT, "JobStreet session expired; send /login jobstreet",
                                   "logged-out")
 
         for _ in range(MAX_STEPS):
             self._settle()
+            if left := self._left_jobstreet(form_url):
+                return left
             if self._success():
                 return Outcome(Q.APPLIED, "submitted", self._screenshot("submitted"), source="jobstreet")
             if self._logged_out():
@@ -109,6 +113,16 @@ class JobStreetApplier:
                        else f"the '{heading or 'current'}' step did not move on")
                 return self._fail(f"{why}; finish this one by hand")
         return self._fail(f"did not reach the review page in {MAX_STEPS} steps")
+
+    def _left_jobstreet(self, form_url: str) -> Outcome | None:
+        """Some jobs' JobStreet apply address forwards to the employer's own careers site."""
+        from urllib.parse import urlparse
+
+        here = urlparse(self.page.url).netloc
+        if here and here != urlparse(form_url).netloc:
+            return self._evidence(Q.EXTERNAL, f"JobStreet sends this one to the employer's own "
+                                  f"site ({here})", "external")
+        return None
 
     def _apply_target(self) -> tuple[str, str | None] | None:
         """(button label, SEEK form URL or None if it leads off-site), or None if no button."""
@@ -232,26 +246,60 @@ class JobStreetApplier:
         return out
 
     def _answer_questions(self) -> Outcome | None:
-        """Answer every employer question from the bank; else NEEDS_INPUT with the questions."""
+        """Answer every employer question from the bank; else NEEDS_INPUT with the questions.
+
+        JobStreet pre-fills questions you've answered on earlier applications (your right to
+        work, your qualification); a question that already has an answer is left as it is.
+        """
         found: list[dict] = []
         missing: list[dict] = []
         for group in self._question_groups():
             text = self._question_text(group)
             if not text:
                 continue
-            options = [o.strip() for o in group.locator("label").all_inner_texts()
-                       if o.strip() and normalise(o) != normalise(text)]
+            options = self._options(group, text)
             q = {"question": text, "options": options}
             found.append(q)
             answer = self._lookup(text)
-            if answer is None or not self._fill(group, answer, options):
-                missing.append(q)
+            if answer is not None and self._fill(group, answer, options):
+                continue
+            if self._has_answer(group):
+                continue   # JobStreet filled it in from your earlier applications
+            missing.append(q)
         if missing:
             out = self._evidence(Q.NEEDS_INPUT, f"{len(missing)} employer question(s) need your answer",
                                  "questions")
-            out.questions = found
+            out.questions = missing
             return out
         return None
+
+    def _options(self, group: Locator, question: str) -> list[str]:
+        """The choices: a dropdown's options (minus its placeholder), else the option labels."""
+        select = group.locator("select")
+        if select.count():
+            opts = select.first.locator("option")
+            out = []
+            for i in range(opts.count()):
+                o = opts.nth(i)
+                label = (o.inner_text() or "").strip()
+                if label and (o.get_attribute("value") or "") != "" and \
+                        not label.lower().startswith(("select", "choose", "please")):
+                    out.append(label)
+            return out
+        return [o.strip() for o in group.locator("label").all_inner_texts()
+                if o.strip() and normalise(o) != normalise(question)]
+
+    def _has_answer(self, group: Locator) -> bool:
+        try:
+            if group.locator("input[type=radio]:checked, input[type=checkbox]:checked").count():
+                return True
+            select = group.locator("select")
+            if select.count():
+                return bool(select.first.input_value())
+            text = group.locator("textarea, input[type='text'], input[type='number'], input:not([type])")
+            return bool(text.count() and text.first.input_value().strip())
+        except (PlaywrightTimeout, PlaywrightError):
+            return False
 
     def _question_text(self, group: Locator) -> str:
         for sel in ("legend", "label", "p", "span"):
