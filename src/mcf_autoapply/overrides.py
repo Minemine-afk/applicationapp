@@ -13,7 +13,7 @@ JS_ENABLED_KEY = "override:jobstreet.enabled"
 JS_HOURLY_KEY = "override:jobstreet.hourly_cap"
 JS_DAILY_KEY = "override:jobstreet.daily_cap"
 JS_AUTO_KEY = "override:jobstreet.allow_auto"
-MAX_HOURLY, MAX_DAILY = 30, 300
+MAX_HOURLY, MAX_DAILY = 60, 500
 MAX_JS_HOURLY, MAX_JS_DAILY = 30, 300   # same ceiling as MCF (you accepted JobStreet's risk)
 
 

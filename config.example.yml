@@ -275,9 +275,9 @@ apply:
   auto_apply_fresh_grad_only: false
   resume_name: ""                     # part of the file name of the MCF resume to attach; "" = MCF's default
   answers_path: ./answers.yml         # your yes/no screening answers (`mcf-apply questions`)
-  hourly_cap: 20
-  daily_cap: 170                      # hard ceiling (/limits in Telegram overrides these two)
-  ramp: [85, 130, 170]                # daily cap steps up one level per week; restarts after a pause
+  hourly_cap: 40
+  daily_cap: 340                      # hard ceiling (/limits in Telegram overrides these two)
+  ramp: [170, 255, 340]                # daily cap steps up one level per week; restarts after a pause
   active_hours: ["08:00", "23:59"]
   timezone: Asia/Singapore
   delay_seconds: [45, 100]            # random wait between submissions

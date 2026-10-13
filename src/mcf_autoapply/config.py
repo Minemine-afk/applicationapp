@@ -71,10 +71,10 @@ class Apply(_Strict):
     # Part of the file name of the resume on your MCF profile to attach. Empty = MCF's default.
     resume_name: str = ""
     answers_path: Path = Path("./answers.yml")
-    daily_cap: int = Field(170, ge=1)
-    hourly_cap: int = Field(20, ge=1)
+    daily_cap: int = Field(340, ge=1)
+    hourly_cap: int = Field(40, ge=1)
     # Daily cap steps up one level per clean week; restarts from the first level after a pause.
-    ramp: list[int] = Field(default_factory=lambda: [85, 130, 170])
+    ramp: list[int] = Field(default_factory=lambda: [170, 255, 340])
     active_hours: tuple[time, time] = (time(8, 0), time(22, 0))
     timezone: str = "Asia/Singapore"
     delay_seconds: tuple[float, float] = (45, 120)
