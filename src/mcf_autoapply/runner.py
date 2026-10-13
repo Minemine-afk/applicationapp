@@ -708,11 +708,22 @@ def serve(cfg: Config, db: Database, notifier: Notifier, log: Log,
                     tasks.submit("run" + suffix, preempt=True)]
 
     def apply_cmd(args: str) -> str:
+        from html import escape
+
+        from mcf_autoapply.pipeline import apply as A
         suffix = site_arg(args)
         if suffix is None:
             return "Use /apply, /apply mcf or /apply jobstreet."
         where = {"": "", "_mcf": " on MCF", "_jobstreet": " on JobStreet"}[suffix]
-        return {"started": f"Applying to the queue{where} now, no search first.",
+        sites = {"": None, "_mcf": ["mcf"], "_jobstreet": ["jobstreet"]}[suffix]
+        ready, site_lines = A.ready_summary(cfg, db, sites)
+        detail = "\n".join(f"• {escape(l)}" for l in site_lines)
+        if not ready:
+            return (f"Nothing{where} can be submitted right now, so I didn't start." +
+                    (f"\n{detail}" if detail else " The queue is empty: tap Apply on /jobs "
+                     "cards, or use Auto mode."))
+        return {"started": f"Applying to {ready} queued job(s){where} now, no search first."
+                           + (f"\n{detail}" if detail else ""),
                 "preempting": f"Stopping {ACTIVITY.get(tasks.current, 'the current task')} "
                               f"to apply{where} now; the rest of that round follows after.",
                 "queued": f"Applying{where} will start as soon as {ACTIVITY.get(tasks.current, 'the current task')} finishes.",

@@ -43,7 +43,7 @@ def pending(db: Database, dry_run: bool, limit: int | None = None, jobstreet: bo
             and (jobstreet or source_of(r["job_uuid"]) != "jobstreet")
             and (allowed is None or source_of(r["job_uuid"]) in allowed)
             # Auto-queued jobs drop out if the filters were tightened since; ones you tapped stay.
-            and not (r["approved_by"] == "auto" and r["job_status"] not in (None, "new"))]
+            and Q.drop_reason(r) is None]
     return rows[:limit] if limit else rows
 
 
@@ -69,6 +69,36 @@ def order_for_run(jobs: list, jobstreet_slots: int | None) -> list:
     return head + rest + tail
 
 
+def ready_summary(cfg: Config, db: Database, sites: Iterable[str] | None = None) -> tuple[int, list[str]]:
+    """How many queued jobs can be submitted right now, and one line per site saying how
+    many it has and, if it can't apply now, why. Used by /status and /apply."""
+    from mcf_autoapply.sources import LABELS
+
+    Q.prune_queue(cfg, db)
+    pacer = Pacer(cfg.apply, db, site_caps=site_caps(cfg))
+    wanted = list(sites) if sites is not None else ["mcf", "jobstreet"]
+    ready, lines = 0, []
+    for site in wanted:
+        rows = pending(db, cfg.apply.mode == "dry_run", jobstreet=True, sites=[site])
+        if not rows:
+            continue
+        name = LABELS.get(site, site)
+        if site == "jobstreet" and not cfg.jobstreet.enabled:
+            why = "JobStreet is off (/jobstreet on)"
+        elif cfg.apply.mode == "dry_run":
+            why = None
+        else:
+            why = pacer.blocked_reason(site)
+        if site != "jobstreet" and cfg.db_path and db.get_state(f"{site}:login") == "out":
+            why = why or "MCF login expired (send /login)"
+        if why:
+            lines.append(f"{name}: {len(rows)} queued, held back: {why}")
+        else:
+            ready += len(rows)
+            lines.append(f"{name}: {len(rows)} ready")
+    return ready, lines
+
+
 def site_caps(cfg: Config) -> dict[str, tuple[int, int]]:
     return {"jobstreet": (cfg.jobstreet.hourly_cap, cfg.jobstreet.daily_cap)}
 
@@ -89,6 +119,7 @@ def run(
     pacer = pacer or Pacer(cfg.apply, db, site_caps=site_caps(cfg))
     result = RunResult(dry_run)
     Q.refresh_answers(db, AnswerBank(cfg.apply.answers_path))
+    Q.prune_queue(cfg, db)
 
     if not dry_run and (reason := pacer.blocked_reason()) and not _is_cap(reason):
         result.stopped = reason          # paused / outside active hours: no site may apply

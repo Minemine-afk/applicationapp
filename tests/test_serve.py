@@ -9,6 +9,27 @@ from mcf_autoapply.telegram import TelegramAPI
 from test_notify import CHAT, TOKEN, FakeTelegram
 
 
+def queue_one(cfg, db):
+    """One approved MCF job, active all day, so /apply has something it can submit."""
+    from datetime import time as dtime
+
+    from conftest import make_job
+    from mcf_autoapply.models import Job
+    from mcf_autoapply.pipeline import queue as Q
+    from mcf_autoapply.pipeline.answers import AnswerBank
+    from mcf_autoapply.pipeline.discover import apply_filters
+
+    class NoQuestions:
+        def screening_questions(self, uuid):
+            return []
+    cfg.apply.mode = "manual"
+    cfg.apply.active_hours = (dtime(0, 0), dtime(23, 59, 59))
+    raw = make_job(minimumYearsExperience=0)
+    db.upsert_job(Job.from_api(raw), "x")
+    apply_filters(db, cfg)
+    Q.approve(db, NoQuestions(), AnswerBank(cfg.apply.answers_path), [raw["uuid"]])
+
+
 class FakeClock:
     def __init__(self):
         self.t = 0.0
@@ -168,6 +189,7 @@ def test_apply_command_skips_search_and_login_jumps_the_queue(cfg, db, tg):
     assert order == ["login", "apply"]
 
     notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    queue_one(cfg, db)
     tg.pending_updates += [message(1, "/apply")]
     applied = []
     import mcf_autoapply.runner as R
@@ -179,7 +201,8 @@ def test_apply_command_skips_search_and_login_jumps_the_queue(cfg, db, tg):
     finally:
         R.apply_only = original
     assert applied == [1]
-    assert any(t.startswith("Applying to the queue now") for t in [b["text"] for b in tg.sent()])
+    texts = [b["text"] for b in tg.sent()]
+    assert any(t.startswith("Applying to 1 queued job(s) now") and "MCF: 1 ready" in t for t in texts)
 
 
 def test_telegram_tasks_preempt_a_running_round_which_resumes_after():
@@ -345,12 +368,13 @@ def test_run_and_apply_take_a_site(cfg, db, tg):
     from mcf_autoapply.overrides import set_jobstreet_enabled
     set_jobstreet_enabled(cfg, db, True)
     notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    queue_one(cfg, db)
     tg.pending_updates += [message(1, "/run jobstreet"), message(2, "/apply mcf"),
                            message(3, "/run mars")]
     serve(cfg, db, notifier, lambda m: None, run=lambda: None, max_loops=1, background=False)
     texts = [b["text"] for b in tg.sent()]
     assert any(t.startswith("Starting a run on JobStreet now") for t in texts)
-    assert any(t.startswith("Applying to the queue on MCF now") for t in texts)
+    assert any(t.startswith("Applying to 1 queued job(s) on MCF now") for t in texts)
     assert "Use /run, /run mcf or /run jobstreet." in texts
 
 
@@ -366,3 +390,34 @@ def test_your_commands_queue_behind_each_other_instead_of_interrupting():
     tasks.current = "run"                                       # now your /run is running
     assert tasks.submit("apply", preempt=True) == "queued"      # /apply waits its turn
     assert not tasks.should_stop()
+
+
+def test_status_and_apply_agree_on_what_can_be_submitted(cfg, db, tg):
+    """/status said ~90 queued while /apply found nothing: auto-queued jobs the filters had
+    since rejected were counted but never taken. Now both use one rule, and /apply says why."""
+    from mcf_autoapply.pipeline import queue as Q
+    queue_one(cfg, db)
+    db.conn.execute("UPDATE applications SET approved_by = 'auto'")
+    db.conn.execute("""UPDATE jobs SET status = 'filtered_out',
+                       filter_reasons = '["title: excluded keyword ''design engineer''"]'""")
+    db.commit()
+    notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    assert "To be submitted: 0" in notifier.status_text()
+    assert db.application_counts() == {Q.SKIPPED: 1}           # out of the queue, with why
+    assert "no longer passes your filters" in db.applications()[0]["error"]
+
+    tg.pending_updates += [message(1, "/apply")]
+    serve(cfg, db, notifier, lambda m: None, run=lambda: None, max_loops=1, background=False)
+    assert any(b["text"].startswith("Nothing can be submitted right now") for b in tg.sent())
+
+
+def test_apply_says_which_site_is_held_back(cfg, db, tg):
+    from mcf_autoapply.pipeline.pacer import Pacer
+    queue_one(cfg, db)
+    Pacer(cfg.apply, db).pause("2 failed submissions in the last hour", "mcf")
+    notifier = Notifier(cfg, db, TelegramAPI(TOKEN), CHAT)
+    tg.pending_updates += [message(1, "/apply")]
+    serve(cfg, db, notifier, lambda m: None, run=lambda: None, max_loops=1, background=False)
+    text = [b["text"] for b in tg.sent()][-1]
+    assert text.startswith("Nothing can be submitted right now")
+    assert "MCF: 1 queued, held back: mcf paused: 2 failed submissions" in text

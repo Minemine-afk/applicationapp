@@ -677,6 +677,7 @@ class Notifier:
         """What's still to be submitted, and what was submitted today."""
         tz = ZoneInfo(self.cfg.apply.timezone)
         midnight = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        Q.prune_queue(self.cfg, self.db)
         today = [r for r in self.db.applications([Q.APPLIED])
                  if r["submitted_at"] and datetime.fromisoformat(r["submitted_at"]) >= midnight]
         queued = self.db.applications([Q.APPROVED])
@@ -753,7 +754,7 @@ class Notifier:
 
     def status_text(self) -> str:
         pacer = Pacer(self.cfg.apply, self.db)
-        counts = self.db.application_counts()
+        counts = self.db.application_counts()   # (recounted below, after pruning)
         lines = [f"<b>Mode</b> {MODE_LABELS[self.cfg.apply.mode]}"
                  + (" · JobStreet on" if self.cfg.jobstreet.enabled else ""),
                  f"Today {pacer.applied_today()}/{pacer.daily_cap()} · "
@@ -764,7 +765,14 @@ class Notifier:
                          f" · this hour {pacer.applied_this_hour('jobstreet')}/{js.hourly_cap}")
         if per_hour := self._applied_per_hour_today(pacer):
             lines.append("Per hour today: " + " · ".join(f"{h:02d}h {n}" for h, n in per_hour))
-        lines += [f"{state}: {n}" for state, n in sorted(counts.items())] or ["Queue is empty"]
+        from mcf_autoapply.pipeline import apply as A
+        ready, site_lines = A.ready_summary(self.cfg, self.db)
+        counts = self.db.application_counts()   # after pruning
+        lines.append(f"📥 <b>To be submitted: {ready}</b>" + (
+            "" if site_lines else " (nothing queued: tap Apply on /jobs cards, or Auto mode)"))
+        lines += [f"  • {escape(l)}" for l in site_lines]
+        lines += [f"{state}: {n}" for state, n in sorted(counts.items())
+                  if state not in (Q.APPROVED,)]
         if reason := pacer.blocked_reason():
             lines.append(f"⏸ {escape(reason)}")
         for site, p in pacer.site_pauses().items():

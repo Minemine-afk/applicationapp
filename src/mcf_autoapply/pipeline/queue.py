@@ -101,10 +101,42 @@ def skip(db: Database, uuids: Iterable[str]) -> list[Decision]:
 
 def enough_skills(cfg: Config, job) -> bool:
     """MCF jobs need apply.min_matched_skills of your skills; JobStreet teasers are too short."""
-    if source_of(job["uuid"]) == "jobstreet" or not cfg.profile.skills:
+    if source_of(job["uuid"]) == "jobstreet" or not cfg.profile.skills or not job["rank_details"]:
         return True   # JobStreet teasers are too short; no skills listed means no rule
     details = json.loads(job["rank_details"] or "{}")
     return len(details.get("matched_skills", [])) >= cfg.apply.min_matched_skills
+
+
+def drop_reason(app, cfg: Config | None = None) -> str | None:
+    """Why an auto-queued job should leave the queue, or None to keep it. Jobs you tapped
+    Apply on are always kept. Age alone isn't a reason: a 15-day-old posting is still open."""
+    if app["approved_by"] != "auto":
+        return None
+    status = app["job_status"]
+    if status == "duplicate":
+        return "duplicate of another posting (applied to or queued there instead)"
+    if status == "filtered_out":
+        reasons = [r for r in json.loads(app["filter_reasons"] or "[]")
+                   if not r.startswith("older than")]
+        if reasons:
+            return "no longer passes your filters: " + "; ".join(reasons)
+    if cfg is not None and not enough_skills(cfg, {"uuid": app["job_uuid"],
+                                                   "rank_details": app["rank_details"]}):
+        return "none of your skills mentioned"
+    return None
+
+
+def prune_queue(cfg: Config, db: Database) -> int:
+    """Take auto-queued jobs that no longer qualify out of the queue (as skipped, with why),
+    so what /status counts is what /apply takes. Returns how many."""
+    n = 0
+    for app in db.applications([APPROVED, DRY_RUN_OK, FAILED]):
+        if why := drop_reason(app, cfg):
+            db.update_application(app["job_uuid"], state=SKIPPED, error=why)
+            n += 1
+    if n:
+        db.commit()
+    return n
 
 
 def auto_approve(

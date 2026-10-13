@@ -261,7 +261,7 @@ class Database:
     ) -> list[sqlite3.Row]:
         """Applications joined with their job, best score first."""
         sql = """SELECT a.*, j.title, j.company_name, j.url, j.score, j.posted_at, j.raw,
-                        j.status AS job_status, j.source
+                        j.status AS job_status, j.source, j.filter_reasons, j.rank_details
                  FROM applications a JOIN jobs j ON j.uuid = a.job_uuid WHERE 1=1"""
         args: list[Any] = []
         if states:
