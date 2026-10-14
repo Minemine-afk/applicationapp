@@ -24,6 +24,84 @@ from mcf_autoapply.pipeline import queue as Q
 from mcf_autoapply.pipeline.answers import normalise
 
 MAX_STEPS = 8
+
+# Reads the step's questions straight from the page: works whatever the markup (fieldsets or
+# not), because each control's question is its <label>, aria label, group legend, or the text
+# just before it. Tags controls with data-mcf-q / data-mcf-opt for filling.
+SCAN_QUESTIONS_JS = r"""
+() => {
+  const root = document.querySelector('main form') || document.querySelector('form')
+            || document.querySelector('main') || document.body;
+  for (const a of ['data-mcf-q', 'data-mcf-opt', 'data-mcf-opt-input'])
+    document.querySelectorAll('[' + a + ']').forEach(e => e.removeAttribute(a));
+  const text = el => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
+  const shown = el => { const s = getComputedStyle(el), r = el.getBoundingClientRect();
+                        return s.display !== 'none' && s.visibility !== 'hidden' && (r.width > 0 || r.height > 0); };
+  const near = els => {
+    const fs = els[0].closest('fieldset');
+    if (fs && fs.querySelector('legend')) return text(fs.querySelector('legend'));
+    const g = els[0].closest('[role=radiogroup],[role=group]');
+    if (g) {
+      const by = g.getAttribute('aria-labelledby');
+      if (by) return by.split(' ').map(id => text(document.getElementById(id))).join(' ');
+      if (g.getAttribute('aria-label')) return g.getAttribute('aria-label');
+    }
+    let a = els[0].parentElement;
+    while (a && !els.every(e => a.contains(e))) a = a.parentElement;
+    for (; a && a !== root.parentElement; a = a.parentElement) {
+      for (const c of a.children) {
+        if (c.querySelector('input,select,textarea') || ['INPUT','SELECT','TEXTAREA'].includes(c.tagName)) break;
+        const t = text(c); if (t) return t;
+      }
+      for (let p = a.previousElementSibling; p; p = p.previousElementSibling) {
+        if (p.querySelector('input,select,textarea')) break;
+        const t = text(p); if (t) return t;
+      }
+    }
+    return '';
+  };
+  const own = el => {
+    if (el.labels && el.labels.length) return text(el.labels[0]);
+    const by = el.getAttribute('aria-labelledby');
+    if (by) return by.split(' ').map(id => text(document.getElementById(id))).join(' ');
+    return el.getAttribute('aria-label') || '';
+  };
+  const out = [], groups = new Set();
+  let i = 0;
+  for (const el of root.querySelectorAll('select, textarea, input')) {
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    if (['hidden', 'submit', 'button', 'file', 'search', 'image', 'reset'].includes(type)) continue;
+    if (type === 'radio' || type === 'checkbox') {
+      const key = el.name || ('#' + i);
+      if (groups.has(key)) continue;
+      groups.add(key);
+      const els = el.name ? [...root.querySelectorAll('input[name="' + CSS.escape(el.name) + '"]')] : [el];
+      const options = els.map((e, j) => {
+        const lab = (e.labels && e.labels[0]) || e.closest('label');
+        if (lab) lab.setAttribute('data-mcf-opt', i + '-' + j);
+        e.setAttribute('data-mcf-opt-input', i + '-' + j);
+        e.setAttribute('data-mcf-q', String(i));
+        return lab ? text(lab) : (e.value || '');
+      });
+      out.push({i, kind: type, question: near(els), options, answered: els.some(e => e.checked)});
+      i++;
+      continue;
+    }
+    if (!shown(el)) continue;
+    el.setAttribute('data-mcf-q', String(i));
+    const question = own(el) || near([el]);
+    if (el.tagName === 'SELECT') {
+      const options = [...el.options].filter(o => o.value !== '' && !/^(select|choose|please)/i.test(text(o)))
+                                     .map(o => text(o));
+      out.push({i, kind: 'select', question, options, answered: el.value !== ''});
+    } else {
+      out.push({i, kind: 'text', question, options: [], answered: (el.value || '').trim() !== ''});
+    }
+    i++;
+  }
+  return out;
+}
+"""
 STEP_TIMEOUT_MS = 30_000
 
 
@@ -164,18 +242,27 @@ class JobStreetApplier:
             return page.url if page.url != before else None
 
     def _step_kind(self) -> str:
-        """documents / questions / profile / other, from the step's address and its controls."""
-        page, url = self.page, self.page.url.lower()
+        """documents / questions / profile / other, from the step's address and its controls.
+
+        The documents step is told apart by its own choices ("Select a resumé", "Don't include
+        a cover letter"), never by having a dropdown: question steps have dropdowns too.
+        """
+        url = self.page.url.lower()
         if any(p in url for p in S.QUESTIONS_URL_PARTS):
             return "questions"
         if any(p in url for p in S.PROFILE_URL_PARTS):
             return "profile"
-        if page.locator(f"{S.RESUME_SELECT}, {S.SAVED_RESUME_RADIO}").count() or \
-                page.get_by_text(re.compile(S.COVER_LETTER_NONE_TEXT, re.I)).count():
+        if self._documents_step():
             return "documents"
-        if self._question_groups():
+        if self._questions():
             return "questions"
         return "other"
+
+    def _documents_step(self) -> bool:
+        page = self.page
+        return bool(page.locator(S.SAVED_RESUME_RADIO).count()
+                    or page.locator("label").filter(
+                        has_text=re.compile(S.DOCUMENT_CHOICE_TEXT, re.I)).count())
 
     def _review(self) -> Outcome:
         shot = self._screenshot("review")
@@ -231,19 +318,17 @@ class JobStreetApplier:
                     continue
         return False
 
-    def _question_groups(self) -> list[Locator]:
-        """Employer questions: groups with inputs, minus the documents step's own groups."""
-        groups = self.page.locator(S.QUESTION_GROUPS)
-        out = []
-        for i in range(groups.count()):
-            g = groups.nth(i)
-            if not g.locator("input, select, textarea").count():
-                continue
-            title = self._question_text(g).lower()
-            if any(w in title for w in S.DOCUMENT_GROUP_WORDS):
-                continue
-            out.append(g)
-        return out
+    def _questions(self) -> list[dict]:
+        """Every question on the step: each dropdown, text box and radio/checkbox group with
+        the text of its label, its choices and whether it already has an answer. The controls
+        are tagged in the page (data-mcf-q) so they can be filled afterwards. The documents
+        step's own choices are left out."""
+        try:
+            found = self.page.evaluate(SCAN_QUESTIONS_JS)
+        except PlaywrightError:
+            return []
+        return [q for q in found if q["question"]
+                and not any(w in q["question"].lower() for w in S.DOCUMENT_GROUP_WORDS)]
 
     def _answer_questions(self) -> Outcome | None:
         """Answer every employer question from the bank; else NEEDS_INPUT with the questions.
@@ -251,64 +336,20 @@ class JobStreetApplier:
         JobStreet pre-fills questions you've answered on earlier applications (your right to
         work, your qualification); a question that already has an answer is left as it is.
         """
-        found: list[dict] = []
         missing: list[dict] = []
-        for group in self._question_groups():
-            text = self._question_text(group)
-            if not text:
+        for q in self._questions():
+            answer = self._lookup(q["question"])
+            if answer is not None and self._fill(q, answer):
                 continue
-            options = self._options(group, text)
-            q = {"question": text, "options": options}
-            found.append(q)
-            answer = self._lookup(text)
-            if answer is not None and self._fill(group, answer, options):
-                continue
-            if self._has_answer(group):
+            if q["answered"]:
                 continue   # JobStreet filled it in from your earlier applications
-            missing.append(q)
+            missing.append({"question": q["question"], "options": q["options"]})
         if missing:
             out = self._evidence(Q.NEEDS_INPUT, f"{len(missing)} employer question(s) need your answer",
                                  "questions")
             out.questions = missing
             return out
         return None
-
-    def _options(self, group: Locator, question: str) -> list[str]:
-        """The choices: a dropdown's options (minus its placeholder), else the option labels."""
-        select = group.locator("select")
-        if select.count():
-            opts = select.first.locator("option")
-            out = []
-            for i in range(opts.count()):
-                o = opts.nth(i)
-                label = (o.inner_text() or "").strip()
-                if label and (o.get_attribute("value") or "") != "" and \
-                        not label.lower().startswith(("select", "choose", "please")):
-                    out.append(label)
-            return out
-        return [o.strip() for o in group.locator("label").all_inner_texts()
-                if o.strip() and normalise(o) != normalise(question)]
-
-    def _has_answer(self, group: Locator) -> bool:
-        try:
-            if group.locator("input[type=radio]:checked, input[type=checkbox]:checked").count():
-                return True
-            select = group.locator("select")
-            if select.count():
-                return bool(select.first.input_value())
-            text = group.locator("textarea, input[type='text'], input[type='number'], input:not([type])")
-            return bool(text.count() and text.first.input_value().strip())
-        except (PlaywrightTimeout, PlaywrightError):
-            return False
-
-    def _question_text(self, group: Locator) -> str:
-        for sel in ("legend", "label", "p", "span"):
-            loc = group.locator(sel)
-            if loc.count():
-                text = loc.first.inner_text().strip()
-                if text:
-                    return text
-        return ""
 
     def _lookup(self, question: str) -> str | None:
         key = normalise(question)
@@ -319,34 +360,44 @@ class JobStreetApplier:
                 return v
         return None
 
-    def _fill(self, group: Locator, answer: str, options: list[str]) -> bool:
-        """Click the option matching the answer, or type it. False if it can't be applied."""
+    def _fill(self, q: dict, answer: str) -> bool:
+        """Pick the choice matching the answer, or type it. False if it can't be applied."""
+        page, i = self.page, q["i"]
         wanted = normalise(answer)
-        radios = group.locator('input[type="radio"], input[type="checkbox"]')
-        if radios.count():
-            for i, label in enumerate(options[:radios.count()]):
-                if normalise(label) == wanted or wanted in normalise(label):
-                    labels = group.locator("label").filter(has_text=label)
-                    if labels.count():
-                        try:
-                            labels.first.click(timeout=5_000)
-                            return True
-                        except (PlaywrightTimeout, PlaywrightError):
-                            pass
-                    return self._pick(radios.nth(i))
-            return False
-        select = group.locator("select")
-        if select.count():
-            for opt in select.first.locator("option").all_inner_texts():
-                if normalise(opt) == wanted or wanted in normalise(opt):
-                    select.first.select_option(label=opt)
-                    return True
-            return False
-        text = group.locator("textarea, input[type='text'], input[type='number'], input:not([type])")
-        if text.count():
-            text.first.fill(answer, timeout=5_000)
+
+        def match(options: list[str]) -> int | None:
+            for j, o in enumerate(options):
+                if normalise(o) == wanted:
+                    return j
+            for j, o in enumerate(options):
+                if wanted and (wanted in normalise(o) or normalise(o) in wanted):
+                    return j
+            return None
+
+        try:
+            if q["kind"] == "select":
+                j = match(q["options"])
+                if j is None:
+                    return False
+                page.locator(f'[data-mcf-q="{i}"]').first.select_option(label=q["options"][j],
+                                                                         timeout=5_000)
+                return True
+            if q["kind"] in ("radio", "checkbox"):
+                j = match(q["options"])
+                if j is None:
+                    return False
+                label = page.locator(f'[data-mcf-opt="{i}-{j}"]')
+                if label.count():
+                    try:
+                        label.first.click(timeout=5_000)
+                        return True
+                    except (PlaywrightTimeout, PlaywrightError):
+                        pass
+                return self._pick(page.locator(f'[data-mcf-opt-input="{i}-{j}"]'))
+            page.locator(f'[data-mcf-q="{i}"]').first.fill(answer, timeout=5_000)
             return True
-        return False
+        except (PlaywrightTimeout, PlaywrightError):
+            return False
 
     # --- page state -----------------------------------------------------------------------
 

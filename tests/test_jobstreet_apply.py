@@ -143,6 +143,18 @@ def test_dropdown_questions_offer_the_dropdowns_choices(site):
     assert submitted[-1]["answers"][q["question"]] == "Less than 1 year"
 
 
+def test_years_of_experience_dropdown_comes_back_as_a_question_not_a_failure(site):
+    """From the screenshots: a questions step starting with a dropdown was taken for the resume
+    step, so its dropdown got a resume picked into it, Continue failed and the job FAILED."""
+    page, make, submitted = site
+    out = make().apply("js:12", f"{BASE}/ok?q=4&prefill=3&plainurl=1", [Q3], ["4500"])
+    assert out.state == Q.NEEDS_INPUT, out.detail
+    [q] = out.questions
+    assert q["question"] == "How many years' experience do you have as a Software Engineer?"
+    assert q["options"] == ["None", "Less than 1 year", "1 year", "2 years"]
+    assert submitted == []
+
+
 def test_apply_address_that_forwards_to_the_employer_is_external_not_failed(site):
     """From the screenshots: 'Software Engineer II' landed on Morgan Stanley's careers site."""
     page, make, submitted = site

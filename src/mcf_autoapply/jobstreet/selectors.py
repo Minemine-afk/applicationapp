@@ -44,6 +44,9 @@ RESUME_SELECT = 'select[data-testid="select-input"], select[name*="resume"], sel
 COVER_LETTER_NONE = ('[data-testid="coverLetter-method-none"], input[name*="cover" i][value="none"], '
                      'label:has-text("Don\'t include a cover letter")')
 COVER_LETTER_NONE_TEXT = r"don.?t include a cover letter"
+# The documents step's own choices; recognises that step (a dropdown alone doesn't: question
+# steps have dropdowns too).
+DOCUMENT_CHOICE_TEXT = r"(upload|select|choose|don.?t include|write) a (r[eé]sum[eé]|cover letter)"
 # Words that mark the documents step's own radio groups (never employer questions).
 DOCUMENT_GROUP_WORDS = ("resum", "cover letter", "selection criteria")
 # Step addresses inside /job/<id>/apply (SEEK); used as hints alongside the page's controls.

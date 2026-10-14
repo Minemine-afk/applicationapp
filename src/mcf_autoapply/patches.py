@@ -228,6 +228,21 @@ def mcf_limits_40_2026_10_13f(cfg: Config, db: Database) -> list[str]:
                    f"submissions stays {int(cfg.apply.delay_seconds[0])}–{int(cfg.apply.delay_seconds[1])} s"]
 
 
+def retry_jobstreet_dropdowns_2026_10_14(cfg: Config, db: Database) -> list[str]:
+    """Question steps starting with a dropdown (years of experience) were taken for the resume
+    step and failed; re-queue the failed JobStreet jobs so their questions come to you."""
+    from mcf_autoapply.pipeline import queue as Q
+
+    n = 0
+    for app in db.applications([Q.FAILED]):
+        if app["job_uuid"].startswith("js:"):
+            db.update_application(app["job_uuid"], state=Q.APPROVED, attempts=0, error=None)
+            n += 1
+    db.commit()
+    return [f"JobStreet: {n} failed job(s) queued again; their unanswered questions will come "
+            "to you here"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
@@ -240,6 +255,7 @@ PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-13d-retry-jobstreet-questions", retry_jobstreet_questions_2026_10_13d),
     ("2026-10-13e-jobstreet-limits-20", jobstreet_limits_20_2026_10_13e),
     ("2026-10-13f-mcf-limits-40", mcf_limits_40_2026_10_13f),
+    ("2026-10-14-retry-jobstreet-dropdowns", retry_jobstreet_dropdowns_2026_10_14),
 ]
 
 
