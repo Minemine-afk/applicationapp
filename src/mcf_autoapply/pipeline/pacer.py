@@ -83,8 +83,8 @@ class Pacer:
         if paused := self.paused(source):
             who = f"{paused['source']} " if paused.get("source") else ""
             return f"{who}paused: {paused['reason']} (send /resume once resolved)"
-        start, end = self.rules.active_hours
-        if not start <= self.now().time() < end:
+        if not self.within_active_hours():
+            start, end = self.rules.active_hours
             return f"outside active hours ({start:%H:%M}–{end:%H:%M} {self.rules.timezone})"
         if source in self.site_caps:
             hourly, daily = self.site_caps[source]
@@ -98,6 +98,14 @@ class Pacer:
         if self.applied_this_hour() >= self.rules.hourly_cap:
             return f"hourly cap reached ({self.rules.hourly_cap})"
         return None
+
+    def within_active_hours(self) -> bool:
+        """Start == end means no limit: any time of day. A window may cross midnight."""
+        start, end = self.rules.active_hours
+        if start == end:
+            return True
+        now = self.now().time()
+        return start <= now < end if start < end else (now >= start or now < end)
 
     def delay_seconds(self) -> float:
         return random.uniform(*self.rules.delay_seconds)

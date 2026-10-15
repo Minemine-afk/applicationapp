@@ -266,3 +266,15 @@ def test_failures_pause_only_their_site_and_resume_starts_the_count_afresh(tmp_p
     db.log(None, "application_failed", {"source": "jobstreet"})
     db.commit()
     assert pacer.record_failure("jobstreet") is False   # 1 since resuming, not 3
+
+
+def test_active_hours_none_overnight_and_daytime(tmp_path, db):
+    from datetime import time as dtime
+    cfg = make_cfg(tmp_path)
+    for start, end, hour, ok in [((0, 0), (0, 0), 3, True), ((0, 0), (0, 0), 23, True),
+                                 ((8, 0), (22, 0), 23, False), ((8, 0), (22, 0), 12, True),
+                                 ((20, 0), (2, 0), 1, True), ((20, 0), (2, 0), 12, False)]:
+        cfg.apply.active_hours = (dtime(*start), dtime(*end))
+        pacer = fixed_pacer(cfg, db, NOON.replace(hour=hour))
+        assert pacer.within_active_hours() is ok, (start, end, hour)
+        assert ("active hours" in (pacer.blocked_reason() or "")) is (not ok)

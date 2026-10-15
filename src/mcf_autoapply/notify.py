@@ -490,7 +490,8 @@ class Notifier:
                    f"<code>/limits jobstreet &lt;h&gt; &lt;d&gt;</code> (max {MAX_JS_HOURLY}/{MAX_JS_DAILY})."
                    if js.enabled else "")
         return (f"Current limits: <b>{a.hourly_cap}/hour, {Pacer(a, self.db).daily_cap()}/day</b>"
-                f"{ramp}, active {a.active_hours[0]:%H:%M}–{a.active_hours[1]:%H:%M}.\n"
+                f"{ramp}, " + ("active any time of day" if a.active_hours[0] == a.active_hours[1] else
+                                f"active {a.active_hours[0]:%H:%M}–{a.active_hours[1]:%H:%M}") + ".\n"
                 f"Change with <code>/limits &lt;per hour&gt; &lt;per day&gt;</code>, e.g. "
                 f"<code>/limits 6 30</code> (max {MAX_HOURLY}/hour, {MAX_DAILY}/day).{js_line}")
 

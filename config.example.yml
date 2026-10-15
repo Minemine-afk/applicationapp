@@ -278,7 +278,7 @@ apply:
   hourly_cap: 40
   daily_cap: 340                      # hard ceiling (/limits in Telegram overrides these two)
   ramp: [170, 255, 340]                # daily cap steps up one level per week; restarts after a pause
-  active_hours: ["08:00", "23:59"]
+  active_hours: ["00:00", "00:00"]    # same start and end = any time of day
   timezone: Asia/Singapore
   delay_seconds: [45, 100]            # random wait between submissions
   max_failures_per_hour: 3            # this many on one site pauses that site only

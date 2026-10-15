@@ -243,6 +243,15 @@ def retry_jobstreet_dropdowns_2026_10_14(cfg: Config, db: Database) -> list[str]
             "to you here"]
 
 
+def any_time_of_day_2026_10_15(cfg: Config, db: Database) -> list[str]:
+    """Requested in chat: no active-hours limit; apply at any time of day."""
+    from datetime import time
+
+    done = edit_config(cfg, [("apply", "active_hours", '["00:00", "00:00"]')])
+    cfg.apply.active_hours = (time(0, 0), time(0, 0))
+    return done + ["active hours: none, applying at any time of day (caps and gaps unchanged)"]
+
+
 PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-12-requested-settings", requested_settings_2026_10_12),
     ("2026-10-12b-broader-search", broader_search_2026_10_12b),
@@ -256,6 +265,7 @@ PATCHES: list[tuple[str, Callable[[Config, Database], list[str]]]] = [
     ("2026-10-13e-jobstreet-limits-20", jobstreet_limits_20_2026_10_13e),
     ("2026-10-13f-mcf-limits-40", mcf_limits_40_2026_10_13f),
     ("2026-10-14-retry-jobstreet-dropdowns", retry_jobstreet_dropdowns_2026_10_14),
+    ("2026-10-15-any-time-of-day", any_time_of_day_2026_10_15),
 ]
 
 

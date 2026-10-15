@@ -147,7 +147,8 @@ submissions pause. Only the linked chat is obeyed. `/login` and `/run` need `mcf
   being reopened for each run. When MCF ends the session, the run stops and asks for `/login`.
 - **Answers:** screening answers only come from `answers.yml`. A job with an unanswered question
   waits in `needs_input` and is never guessed.
-- **Pacing:** submissions happen only within `active_hours`, at most `hourly_cap` per hour, with
+- **Pacing:** submissions happen at any time of day (or only within `active_hours`, if you
+  set different start and end times), at most `hourly_cap` per hour, with
   a random 45–100 s gap. The daily cap starts at 170 and rises weekly to 340 (`ramp`). Jobs the
   hourly cap holds back are applied to at the top of the next hour, not at the next scheduled run.
 - **Automatic pause:** a CAPTCHA or repeated failures pause all submissions until you run

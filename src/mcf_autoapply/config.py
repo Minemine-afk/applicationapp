@@ -75,7 +75,9 @@ class Apply(_Strict):
     hourly_cap: int = Field(40, ge=1)
     # Daily cap steps up one level per clean week; restarts from the first level after a pause.
     ramp: list[int] = Field(default_factory=lambda: [170, 255, 340])
-    active_hours: tuple[time, time] = (time(8, 0), time(22, 0))
+    # When submissions may happen. The same start and end (e.g. ["00:00", "00:00"]) means any
+    # time of day; an end before the start (["20:00", "02:00"]) runs past midnight.
+    active_hours: tuple[time, time] = (time(0, 0), time(0, 0))
     timezone: str = "Asia/Singapore"
     delay_seconds: tuple[float, float] = (45, 120)
     max_failures_per_hour: int = Field(3, ge=1)   # per site
